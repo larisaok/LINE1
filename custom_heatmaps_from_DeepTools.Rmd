@@ -1,0 +1,553 @@
+---
+title: "Untitled"
+author: "Larisa Okorokova"
+date: "6/8/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(ggplot2)
+library(data.table)
+library(pheatmap)
+library(ComplexHeatmap)
+library(ggplot2)
+library(dplyr)
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Matrix from DeepTools
+
+```{r}
+matrix_heatmap_AT <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/matrix_intermedite_exons_long_introns_AT.mat.gz", skip = 1)
+matrix_heatmap_L1_motif <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/matrix_intermedite_exons_long_introns_L1.mat.gz", skip = 1)
+
+rownames(matrix_heatmap_AT) <- matrix_heatmap_AT$V4
+matrix_heatmap_AT <- as.data.frame(matrix_heatmap_AT[, c(4, 7:426)])
+
+rownames(matrix_heatmap_AT) <- matrix_heatmap_AT[, 1]
+matrix_heatmap_AT <- matrix_heatmap_AT[, -1]
+
+row_dend <- hclust(dist(matrix_heatmap_AT), method = "ward.D2")
+
+AT_heatmap <- pheatmap(matrix_heatmap_AT, 
+                      cluster_rows = row_dend,
+                      cluster_cols = FALSE,
+                      show_rownames = FALSE,
+                      show_colnames = FALSE)
+AT_heatmap
+```
+
+```{r}
+matrix_heatmap_L1_motif_plus <- as.data.frame(matrix_heatmap_L1_motif[, 7:426])
+matrix_heatmap_L1_motif_minus <- as.data.frame(matrix_heatmap_L1_motif[, 427:846])
+
+
+L1_motif_heatmap_plus <- pheatmap(matrix_heatmap_L1_motif_plus, 
+                      cluster_rows = row_dend,
+                      cluster_cols = FALSE,
+                      show_rownames = FALSE,
+                      show_colnames = FALSE)
+L1_motif_heatmap_plus
+
+L1_motif_heatmap_minus <- pheatmap(matrix_heatmap_L1_motif_minus, 
+                      cluster_rows = row_dend,
+                      cluster_cols = FALSE,
+                      show_rownames = FALSE,
+                      show_colnames = FALSE)
+L1_motif_heatmap_minus
+
+plot(colMeans(matrix_heatmap_L1_motif_plus))
+plot(colMeans(matrix_heatmap_L1_motif_minus))
+plot(colMeans(matrix_heatmap_AT))
+
+
+```
+
+```{r}
+res.pca <- prcomp(matrix_heatmap_AT, scale = TRUE)
+#factoextra::fviz_eig(res.pca)
+#factoextra::fviz_pca_ind(res.pca, geom.ind = "point")
+
+factoextra::fviz_pca_var(res.pca,
+             col.var = "contrib", # Color by contributions to the PC
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE     # Avoid text overlapping
+             )
+
+res.var <- factoextra::get_pca_var(res.pca)
+res.ind <- factoextra::get_pca_ind(res.pca)
+
+
+ggplot(NULL, aes(x=matrix_heatmap_AT$V229, y = res.ind$coord[, "Dim.1"])) +
+  geom_point()
+```
+
+
+
+```{r}
+matrix_heatmap_AT_intermediate_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/matrix_only_longest_transcripts_intermedite_exons_AT.mat.gz", skip = 1)
+matrix_heatmap_L1_intermediate_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/matrix_only_longest_transcripts_intermedite_exons_L1.mat.gz", skip = 1)
+matrix_heatmap_L1motif_intermediate_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/matrix_only_longest_transcripts_intermedite_exons_L1motif.mat.gz", skip = 1)
+matrix_heatmap_SINEs_intermediate_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/matrix_only_longest_transcripts_intermedite_exons_SINEs.mat.gz", skip = 1)
+
+matrix_heatmap_AT_first_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/matrix_only_longest_transcripts_first_exons_AT.mat.gz", skip = 1)
+matrix_heatmap_L1_first_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/matrix_only_longest_transcripts_first_exons_L1.mat.gz", skip = 1)
+matrix_heatmap_L1motif_first_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/matrix_only_longest_transcripts_first_exons_L1motif.mat.gz", skip = 1)
+matrix_heatmap_SINEs_first_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/matrix_only_longest_transcripts_first_exons_SINEs.mat.gz", skip = 1)
+
+matrix_heatmap_AT_last_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/matrix_only_longest_transcripts_last_exons_AT.mat.gz", skip = 1)
+matrix_heatmap_L1_last_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/matrix_only_longest_transcripts_last_exons_L1.mat.gz", skip = 1)
+matrix_heatmap_L1motif_last_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/matrix_only_longest_transcripts_last_exons_L1motif.mat.gz", skip = 1)
+matrix_heatmap_SINEs_last_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/matrix_only_longest_transcripts_last_exons_SINEs.mat.gz", skip = 1)
+
+matrix_heatmap_AT_monoexonic_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/matrix_only_longest_transcripts_monoexonic_exons_AT.mat.gz", skip = 1)
+matrix_heatmap_L1_monoexonic_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/matrix_only_longest_transcripts_monoexonic_exons_L1.mat.gz", skip = 1)
+matrix_heatmap_L1motif_monoexonic_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/matrix_only_longest_transcripts_monoexonic_exons_L1motif.mat.gz", skip = 1)
+matrix_heatmap_SINEs_monoexonic_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/matrix_only_longest_transcripts_monoexonic_exons_SINEs.mat.gz", skip = 1)
+```
+
+
+```{r}
+test_matrix <- matrix_heatmap_AT_intermediate_exon[, 1:6]
+
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_AT_intermediate_exon[, 7:106]))
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_AT_intermediate_exon[, 107:206]))
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_AT_intermediate_exon[, 207:306]))
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_AT_intermediate_exon[, 307:406]))
+
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_AT_intermediate_exon[, 407:466]))
+
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_AT_intermediate_exon[, 467:566]))
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_AT_intermediate_exon[, 567:666]))
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_AT_intermediate_exon[, 667:766]))
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_AT_intermediate_exon[, 767:866]))
+
+
+colnames(test_matrix) <- c("seqid", "start", "end", "exon_id", "score", "strand", 
+                           "AT_in_500bp_1", "AT_in_500bp_2", "AT_in_500bp_3", "AT_in_500bp_4", "AT_exon",
+                           "AT_in_500bp_5", "AT_in_500bp_6", "AT_in_500bp_7", "AT_in_500bp_8")
+
+pheatmap(test_matrix[, 7:ncol(test_matrix)], 
+         cluster_cols = FALSE, cluster_rows = FALSE)
+
+```
+
+```{r}
+test_matrix <- matrix_heatmap_L1_intermediate_exon[, 1:6]
+
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_L1_intermediate_exon[, 7:106]))
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_L1_intermediate_exon[, 107:206]))
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_L1_intermediate_exon[, 207:306]))
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_L1_intermediate_exon[, 307:406]))
+
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_L1_intermediate_exon[, 407:466]))
+
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_L1_intermediate_exon[, 467:566]))
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_L1_intermediate_exon[, 567:666]))
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_L1_intermediate_exon[, 667:766]))
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_L1_intermediate_exon[, 767:866]))
+
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_L1_intermediate_exon[, 867:966]))
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_L1_intermediate_exon[, 967:1066]))
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_L1_intermediate_exon[, 1067:1166]))
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_L1_intermediate_exon[, 1167:1266]))
+
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_L1_intermediate_exon[, 1267:1326]))
+
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_L1_intermediate_exon[, 1327:1426]))
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_L1_intermediate_exon[, 1427:1526]))
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_L1_intermediate_exon[, 1527:1626]))
+test_matrix <- cbind(test_matrix, rowMeans(matrix_heatmap_L1_intermediate_exon[, 1627:1726]))
+
+
+colnames(test_matrix) <- c("seqid", "start", "end", "exon_id", "score", "strand", 
+                           "L1_plus_in_500bp_1", "L1_plus_in_500bp_2", "L1_plus_in_500bp_3", "L1_plus_in_500bp_4", "L1_plus_exon",
+                           "L1_plus_in_500bp_5", "L1_plus_in_500bp_6", "L1_plus_in_500bp_7", "L1_plus_in_500bp_8",
+                           "L1_minus_in_500bp_1", "L1_minus_in_500bp_2", "L1_minus_in_500bp_3", "L1_minus_in_500bp_4", "L1_minus_exon",
+                           "L1_minus_in_500bp_5", "L1_minus_in_500bp_6", "L1_minus_in_500bp_7", "L1_minus_in_500bp_8")
+
+pheatmap(test_matrix[strand == "+", 7:ncol(test_matrix)], 
+         cluster_cols = FALSE, cluster_rows = FALSE)
+
+pheatmap(test_matrix[strand == "-", 7:ncol(test_matrix)], 
+         cluster_cols = FALSE, cluster_rows = FALSE)
+```
+
+
+```{r}
+matrix_heatmap_Alu_intermediate_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/matrix_only_longest_transcripts_intermediate_exons_by_strand_Alu.mat.gz", skip = 1)
+
+sense <- matrix_heatmap_Alu_intermediate_exon[V6 == "+", c(1:6, 7:866)]
+sense <- rbind(sense, matrix_heatmap_Alu_intermediate_exon[V6 == "-", c(1:6, 867:1726)], use.names=FALSE)
+sense$orientation <- "sense"
+
+summary(sense)
+
+ggplot(sense, aes(y = V8, x = V4)) +
+  geom_point()
+
+
+summary(as.factor(sense$V10))
+
+antisense <- matrix_heatmap_Alu_intermediate_exon[V6 == "+", c(1:6, 867:1726)]
+antisense <- rbind(antisense, matrix_heatmap_Alu_intermediate_exon[V6 == "-", c(1:6, 7:866)], use.names=FALSE)
+antisense$orientation <- "antisense"
+
+test_matrix <- rbind(sense, antisense, use.names=FALSE)
+
+summary <- test_matrix %>%
+  group_by(orientation) %>%
+  summarise(across(where(is.numeric), ~ mean(.x, na.rm = TRUE)))
+
+summary <- t(summary)
+
+colnames(summary) <- summary[1, ]
+summary <- summary[-c(1:4), ]
+summary <- as.data.frame(summary)
+summary$old_cols <- rownames(summary)
+summary$tmp_dist <- gsub("V", "", summary$old_cols)
+
+setDT(summary)
+summary[tmp_dist %in% 407:466, part := "exon"]
+summary[tmp_dist %in% 7:406, part := "upstream"]
+summary[tmp_dist %in% 467:867, part := "downstream"]
+
+summary$distance <- c(seq(2000, 0, by=-5), seq(5, 295, by=5), seq(5, 2000, by = 5))
+
+summary <- melt.data.table(summary, measure.vars = c("sense", "antisense"))
+
+ggplot(summary[distance < 1000 & part != "exon", ], aes(x=distance, y=value, color=variable, shape = part)) +
+  geom_point()
+```
+
+
+## Bedtools window
+
+```{r}
+SINEs_around_intermediate_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/only_longest_transcripts_intermedite_exons_window2000_SINEs.bed")
+
+colnames(SINEs_around_intermediate_exon) <- c("seqid", "exon_start", "exon_end", "exon_id", "exon_score", "exon_strand", "seqid_sine", "sine_start", "sine_end", "sine_type", "sine_score", "sine_strand")
+
+SINEs_around_intermediate_exon[exon_strand == sine_strand, orientation := "sense"]
+SINEs_around_intermediate_exon[exon_strand != sine_strand, orientation := "antisense"]
+
+SINEs_around_intermediate_exon[exon_strand == "+" & sine_start > exon_end, stream := "downstream"]
+SINEs_around_intermediate_exon[exon_strand == "-" & sine_end < exon_start, stream := "downstream"]
+
+SINEs_around_intermediate_exon[exon_strand == "+" & sine_end < exon_start, stream := "upstream"] 
+SINEs_around_intermediate_exon[exon_strand == "-" & sine_start > exon_end, stream := "upstream"]
+
+SINEs_around_intermediate_exon[stream == "upstream" & exon_strand == "+", distance_to_upstream := exon_start - sine_end] 
+SINEs_around_intermediate_exon[stream == "upstream" & exon_strand == "-", distance_to_upstream := sine_start - exon_end] 
+
+SINEs_around_intermediate_exon[stream == "downstream" & exon_strand == "+", distance_to_downstream := sine_start - exon_end]
+SINEs_around_intermediate_exon[stream == "downstream" & exon_strand == "-", distance_to_downstream := exon_start - sine_end] 
+
+
+ggplot(SINEs_around_intermediate_exon[distance_to_upstream < 200, ], aes(x=distance_to_upstream, fill = orientation))+
+  geom_histogram(alpha=0.7, bins=20, position="identity")
+
+ggplot(SINEs_around_intermediate_exon[distance_to_downstream < 200, ], aes(x=distance_to_downstream, fill = orientation))+
+  geom_histogram(alpha=0.7, bins=100, position="identity")
+
+ggplot(SINEs_around_intermediate_exon[distance_to_downstream < 200 & orientation == "antisense", ], aes(x=distance_to_downstream, fill = orientation))+
+  geom_histogram(alpha=0.7, bins=100)
+
+ggplot(SINEs_around_intermediate_exon[distance_to_upstream < 300 & sine_type %like% "Alu", ], aes(x=distance_to_upstream, color = orientation))+
+  geom_histogram()
+   #geom_histogram(aes(y = after_stat(count / sum(count))), bins = 100) +
+  #scale_y_continuous(labels = scales::percent)
+```
+
+```{r}
+L1_around_intermediate_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/only_longest_transcripts_intermedite_exons_window2000_LINEs.bed")
+
+colnames(L1_around_intermediate_exon) <- c("seqid", "exon_start", "exon_end", "exon_id", "exon_score", "exon_strand", "seqid_l1", "l1_start", "l1_end", "l1_type", "l1_score", "l1_strand")
+
+L1_around_intermediate_exon[exon_strand == l1_strand, orientation := "sense"]
+L1_around_intermediate_exon[exon_strand != l1_strand, orientation := "antisense"]
+
+L1_around_intermediate_exon[exon_strand == "+" & l1_start > exon_end, stream := "downstream"]
+L1_around_intermediate_exon[exon_strand == "-" & l1_end < exon_start, stream := "downstream"]
+
+L1_around_intermediate_exon[exon_strand == "+" & l1_end < exon_start, stream := "upstream"] 
+L1_around_intermediate_exon[exon_strand == "-" & l1_start > exon_end, stream := "upstream"]
+
+L1_around_intermediate_exon[stream == "upstream" & exon_strand == "+", distance_to_upstream := exon_start - l1_end] 
+L1_around_intermediate_exon[stream == "upstream" & exon_strand == "-", distance_to_upstream := l1_start - exon_end] 
+
+L1_around_intermediate_exon[stream == "downstream" & exon_strand == "+", distance_to_downstream := l1_start - exon_end]
+L1_around_intermediate_exon[stream == "downstream" & exon_strand == "-", distance_to_downstream := exon_start - l1_end] 
+L1_around_intermediate_exon[, integrity := (l1_end - l1_start) / 6000]
+
+
+ggplot(L1_around_intermediate_exon[distance_to_upstream < 2000, ], aes(x=distance_to_upstream,  fill = orientation))+
+  geom_histogram(alpha=0.7, bins=100)
+
+ggplot(L1_around_intermediate_exon[distance_to_downstream < 2000, ], aes(x=distance_to_downstream, fill = orientation))+
+  geom_histogram(alpha=0.7, bins=100)
+
+ggplot(L1_around_intermediate_exon[distance_to_upstream < 2000 & l1_type %like% "L1PA1", ], aes(x=distance_to_upstream, color = orientation))+
+   geom_histogram(aes(y = after_stat(count / sum(count))), bins = 100) +
+  scale_y_continuous(labels = scales::percent)
+
+ggplot(L1_around_intermediate_exon, aes(x = distance_to_downstream, y = integrity, color = orientation)) +
+  geom_point()
+```
+
+
+```{r}
+L1motif_around_intermediate_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/only_longest_transcripts_intermedite_exons_window2000_L1motifs.bed")
+
+colnames(L1motif_around_intermediate_exon) <- c("seqid", "exon_start", "exon_end", "exon_id", "exon_score", "exon_strand", "seqid_L1motif", "L1motif_start", "L1motif_end", "L1motif_type", "L1motif_score", "L1motif_strand")
+
+L1motif_around_intermediate_exon[exon_strand == L1motif_strand, orientation := "sense"]
+L1motif_around_intermediate_exon[exon_strand != L1motif_strand, orientation := "antisense"]
+
+L1motif_around_intermediate_exon[exon_strand == "+" & L1motif_start > exon_end, stream := "downstream"]
+L1motif_around_intermediate_exon[exon_strand == "-" & L1motif_end < exon_start, stream := "downstream"]
+
+L1motif_around_intermediate_exon[exon_strand == "+" & L1motif_end < exon_start, stream := "upstream"] 
+L1motif_around_intermediate_exon[exon_strand == "-" & L1motif_start > exon_end, stream := "upstream"]
+
+L1motif_around_intermediate_exon[stream == "upstream" & exon_strand == "+", distance_to_upstream := exon_start - L1motif_end] 
+L1motif_around_intermediate_exon[stream == "upstream" & exon_strand == "-", distance_to_upstream := L1motif_start - exon_end] 
+
+L1motif_around_intermediate_exon[stream == "downstream" & exon_strand == "+", distance_to_downstream := L1motif_start - exon_end]
+L1motif_around_intermediate_exon[stream == "downstream" & exon_strand == "-", distance_to_downstream := exon_start - L1motif_end] 
+
+
+ggplot(L1motif_around_intermediate_exon[distance_to_upstream < 2000, ], aes(x=distance_to_upstream,  fill = orientation))+
+  geom_histogram(alpha=0.7, bins=100, position = "identity")
+
+ggplot(L1motif_around_intermediate_exon[distance_to_downstream < 2000, ], aes(x=distance_to_downstream, fill = orientation))+
+  geom_histogram(alpha=0.7, bins=100)
+
+ggplot(L1motif_around_intermediate_exon[distance_to_upstream < 200, ], aes(x=distance_to_upstream, color = orientation))+
+   geom_histogram(aes(y = after_stat(count / sum(count))), bins = 100) +
+  scale_y_continuous(labels = scales::percent)
+```
+
+
+```{r}
+L1motif_around_intermediate_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/only_longest_transcripts_intermedite_exons_window2000_L1motifs.bed")
+
+colnames(L1motif_around_intermediate_exon) <- c("seqid", "exon_start", "exon_end", "exon_id", "exon_score", "exon_strand", "seqid_L1motif", "L1motif_start", "L1motif_end", "L1motif_type", "L1motif_score", "L1motif_strand")
+
+L1motif_around_intermediate_exon[exon_strand == L1motif_strand, orientation := "sense"]
+L1motif_around_intermediate_exon[exon_strand != L1motif_strand, orientation := "antisense"]
+
+L1motif_around_intermediate_exon[exon_strand == "+" & L1motif_start > exon_end, stream := "downstream"]
+L1motif_around_intermediate_exon[exon_strand == "-" & L1motif_end < exon_start, stream := "downstream"]
+
+L1motif_around_intermediate_exon[exon_strand == "+" & L1motif_end < exon_start, stream := "upstream"] 
+L1motif_around_intermediate_exon[exon_strand == "-" & L1motif_start > exon_end, stream := "upstream"]
+
+L1motif_around_intermediate_exon[stream == "upstream" & exon_strand == "+", distance_to_upstream := exon_start - L1motif_end] 
+L1motif_around_intermediate_exon[stream == "upstream" & exon_strand == "-", distance_to_upstream := L1motif_start - exon_end] 
+
+L1motif_around_intermediate_exon[stream == "downstream" & exon_strand == "+", distance_to_downstream := L1motif_start - exon_end]
+L1motif_around_intermediate_exon[stream == "downstream" & exon_strand == "-", distance_to_downstream := exon_start - L1motif_end] 
+
+
+ggplot(L1motif_around_intermediate_exon[distance_to_upstream < 2000, ], aes(x=distance_to_upstream,  fill = orientation))+
+  geom_histogram(alpha=0.7, bins=100, position = "identity")
+
+ggplot(L1motif_around_intermediate_exon[distance_to_downstream < 2000, ], aes(x=distance_to_downstream, fill = orientation))+
+  geom_histogram(alpha=0.7, bins=100)
+
+ggplot(L1motif_around_intermediate_exon[distance_to_upstream < 200, ], aes(x=distance_to_upstream, color = orientation))+
+   geom_histogram(aes(y = after_stat(count / sum(count))), bins = 100) +
+  scale_y_continuous(labels = scales::percent)
+```
+
+## Bedtools closest
+
+
+```{r}
+L1motif_around_intermediate_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/only_longest_transcripts_intermedite_exons_dist_L1motif.bed")
+
+colnames(L1motif_around_intermediate_exon) <- c("seqid", "exon_start", "exon_end", "exon_id", "exon_score", "exon_strand", "seqid_L1motif", "L1motif_start", "L1motif_end", "L1motif_type", "L1motif_score", "L1motif_strand", "dist_L1motif")
+
+L1motif_around_intermediate_exon[exon_strand == L1motif_strand, orientation__L1motif := "sense"]
+L1motif_around_intermediate_exon[exon_strand != L1motif_strand, orientation__L1motif := "antisense"]
+
+L1motif_around_intermediate_exon <- L1motif_around_intermediate_exon[dist_L1motif != -1, ]
+
+ggplot(L1motif_around_intermediate_exon[dist_L1motif < 200 & dist_L1motif > -200, ], aes(x=dist_L1motif, color = orientation__L1motif, fill = orientation__L1motif))+
+  geom_histogram(alpha=0.7, bins=200, position = "identity")
+
+ggplot(L1motif_around_intermediate_exon[dist_L1motif < 200 & dist_L1motif > -200, ], aes(x=dist_L1motif, color = orientation__L1motif, fill = orientation__L1motif))+
+  geom_histogram(aes(y = after_stat(count / sum(count))), bins = 400, position = "identity") +
+  scale_y_continuous(labels = scales::percent)
+
+```
+
+
+```{r}
+L1_around_intermediate_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/only_longest_transcripts_intermedite_exons_dist_L1.bed")
+
+colnames(L1_around_intermediate_exon) <- c("seqid", "exon_start", "exon_end", "exon_id", "exon_score", "exon_strand", "seqid_L1", "L1_start", "L1_end", "L1_type", "L1_score", "L1_strand", "dist_L1")
+
+L1_around_intermediate_exon[exon_strand == L1_strand, orientation_L1 := "sense"]
+L1_around_intermediate_exon[exon_strand != L1_strand, orientation_L1 := "antisense"]
+
+L1_around_intermediate_exon <- L1_around_intermediate_exon[dist_L1 != -1, ]
+```
+
+```{r}
+L1HS_around_intermediate_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/only_longest_transcripts_intermedite_exons_dist_L1HS.bed")
+
+colnames(L1HS_around_intermediate_exon) <- c("seqid", "exon_start", "exon_end", "exon_id", "exon_score", "exon_strand", "seqid_L1HS", "L1HS_start", "L1HS_end", "L1HS_type", "L1HS_score", "L1HS_strand", "dist_L1HS")
+
+L1HS_around_intermediate_exon[exon_strand == L1HS_strand, orientation_L1HS := "sense"]
+L1HS_around_intermediate_exon[exon_strand != L1HS_strand, orientation_L1HS := "antisense"]
+
+L1HS_around_intermediate_exon <- L1HS_around_intermediate_exon[dist_L1HS != -1, ]
+```
+
+```{r}
+SINEs_around_intermediate_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/only_longest_transcripts_intermedite_exons_dist_SINEs.bed")
+
+colnames(SINEs_around_intermediate_exon) <- c("seqid", "exon_start", "exon_end", "exon_id", "exon_score", "exon_strand", "seqid_SINEs", "SINEs_start", "SINEs_end", "SINEs_type", "SINEs_score", "SINEs_strand", "dist_SINEs")
+
+SINEs_around_intermediate_exon[exon_strand == SINEs_strand, orientation_SINEs := "sense"]
+SINEs_around_intermediate_exon[exon_strand != SINEs_strand, orientation_SINEs := "antisense"]
+
+SINEs_around_intermediate_exon <- SINEs_around_intermediate_exon[dist_SINEs != -1, ]
+```
+
+```{r}
+Alu_around_intermediate_exon <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/exon_data/only_longest_transcripts_intermedite_exons_dist_Alu.bed")
+
+colnames(Alu_around_intermediate_exon) <- c("seqid", "exon_start", "exon_end", "exon_id", "exon_score", "exon_strand", "seqid_Alu", "Alu_start", "Alu_end", "Alu_type", "Alu_score", "Alu_strand", "dist_Alu")
+
+Alu_around_intermediate_exon[exon_strand == Alu_strand, orientation_Alu := "sense"]
+Alu_around_intermediate_exon[exon_strand != Alu_strand, orientation_Alu := "antisense"]
+
+Alu_around_intermediate_exon <- Alu_around_intermediate_exon[dist_Alu != -1, ]
+```
+
+```{r}
+intermediate_exons <- fread("only_longest_transcripts_intermediate_exons.tsv")
+
+intermediate_exons$feature <- NULL
+intermediate_exons$frame <- NULL
+
+tmp <- merge(intermediate_exons,  L1motif_around_intermediate_exon, by =  "exon_id")
+tmp <- merge(tmp, L1HS_around_intermediate_exon, by = c("exon_id", "exon_start", "exon_end", "exon_score", "exon_strand"))
+tmp$seqid.x <- NULL
+tmp$seqid.y <- NULL
+tmp <- merge(tmp, L1_around_intermediate_exon, by = c("exon_id", "exon_start", "exon_end", "exon_score", "exon_strand"))
+tmp$seqid.x <- NULL
+tmp$seqid.y <- NULL
+tmp <- merge(tmp, SINEs_around_intermediate_exon, by = c("exon_id", "exon_start", "exon_end", "exon_score", "exon_strand"))
+tmp <- merge(tmp, Alu_around_intermediate_exon, by = c("exon_id", "exon_start", "exon_end", "exon_score", "exon_strand"))
+tmp$seqid.x <- NULL
+tmp$seqid.y <- NULL
+
+
+intermediate_exons <- tmp
+rm(tmp)
+rm(L1_around_intermediate_exon)
+rm(L1HS_around_intermediate_exon)
+rm(Alu_around_intermediate_exon)
+rm(L1motif_around_intermediate_exon)
+rm(SINEs_around_intermediate_exon)
+```
+
+```{r}
+CEG_gene_list <- fread("./gene_sets//list_CEGv2.tsv", header = FALSE)
+NEG_gene_list <- fread("./gene_sets/list_NEGv1.tsv", header = FALSE)
+
+intermediate_exons[gene_name %in% CEG_gene_list$V1, essential_Hart_2017 := TRUE]
+intermediate_exons[gene_name %in% NEG_gene_list$V1, essential_Hart_2017 := FALSE]
+
+colnames(intermediate_exons)
+```
+
+## Plots
+
+## SHOW to GAEL
+
+```{r}
+ggplot(intermediate_exons[dist_Alu > -200 & dist_Alu < 200 & !is.na(essential_Hart_2017), ], aes(dist_Alu, fill = essential_Hart_2017)) +
+  geom_histogram(position = "identity", alpha = 0.6, bins = 50) +
+  facet_wrap(~orientation_Alu)
+
+ggplot(intermediate_exons[dist_L1motif > -200 & dist_L1motif < 200 & !is.na(essential_Hart_2017), ], aes(dist_L1motif, fill = essential_Hart_2017)) +
+  geom_histogram(position = "identity", alpha = 0.6, bins = 50) +
+  facet_wrap(~orientation__L1motif)
+```
+
+
+```{r}
+intermediate_exons[, L1motif_window := round(dist_L1motif/10, 1)]
+intermediate_exons[, L1motif_in_window :=.N, by=c("L1motif_window", "orientation__L1motif")]
+
+intermediate_exons[, Alu_window := round(dist_Alu/10, 0)]
+intermediate_exons[, Alu_in_window :=.N, by=c("Alu_window", "orientation_Alu")]
+
+intermediate_exons[, L1_window := round(dist_L1/10, 0)]
+intermediate_exons[, L1_in_window :=.N, by=c("L1_window", "orientation_L1")]
+
+intermediate_exons[, L1HS_window := round(dist_L1HS/10, 0)]
+intermediate_exons[, L1HS_in_window :=.N, by=c("L1HS_window", "orientation_L1HS")]
+
+
+p1 <- ggplot(intermediate_exons[dist_Alu < 200 & dist_Alu > -200, ], 
+             aes(x=Alu_window, y=Alu_in_window, color=orientation_Alu, fill = dist_Alu < 0))+
+  geom_point() +
+  geom_smooth()+
+  ylim(c(0, 500))+
+  theme_bw()+
+  guides(fill = "none")+
+  scale_x_continuous(labels = c("-200", "-100", "0", "100", "200"))+
+  labs(x="", y = "Alu count",
+       color = "Alu orientation \n(relative to exon)")+
+  theme(axis.text.x = element_text(face="bold", size=16),
+          axis.text.y = element_text(face="bold", size=17), 
+          axis.title = element_text(face="bold", size=17),
+        legend.title = element_text(face="bold", size=17),
+        legend.text = element_text(face="bold", size=17))
+
+p2 <- ggplot(intermediate_exons[dist_L1 < 200 & dist_L1 > -200, ], 
+             aes(x=L1_window, y=L1_in_window, color=orientation_L1, fill = dist_L1 < 0))+
+  geom_point() +
+  geom_smooth()+
+  ylim(c(0, 250))+
+  theme_bw()+
+  guides(fill = "none")+
+  scale_x_continuous(labels = c("-200", "-100", "0", "100", "200"))+
+  labs(x="", y = "L1 count", 
+       color = "L1 orientation \n(relative to exon)")+
+  theme(axis.text.x = element_text(face="bold", size=16),
+          axis.text.y = element_text(face="bold", size=17), 
+          axis.title = element_text(face="bold", size=17),
+        legend.title = element_text(face="bold", size=17),
+        legend.text = element_text(face="bold", size=17))
+
+p3 <- ggplot(intermediate_exons[dist_L1motif < 200 & dist_L1motif > -200, ], 
+             aes(x=L1motif_window,
+                 y=L1motif_in_window, color=orientation__L1motif, fill = dist_L1motif < 0))+
+  geom_point() +
+  theme_bw()+
+  guides(fill = "none")+
+  scale_x_continuous(labels = c("-200", "-100", "0", "100", "200"))+
+  labs(x="Upstream <--- Distance to exon, bp ---> Downstream", y = "L1 motif count", 
+       color = "L1 motif \norientation \n(relative to exon)")+
+  theme(axis.text.x = element_text(face="bold", size=16),
+          axis.text.y = element_text(face="bold", size=17), 
+          axis.title = element_text(face="bold", size=17),
+        legend.title = element_text(face="bold", size=17),
+        legend.text = element_text(face="bold", size=17))
+
+g <- gridExtra::arrangeGrob(p1, p2, p3, 
+        ncol=1, heights = c(3,3,3), widths = 20)
+
+ggsave(file="whatever.pdf", g,  width = 20, height = 30, units = "cm")
+```
+
+

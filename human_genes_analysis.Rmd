@@ -1,0 +1,2660 @@
+---
+title: "Analysis of L1 target motif presence in human genomes"
+author: "Larisa Okorokova"
+date: "18/01/2021"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+Sys.setenv(LANG = "en")
+
+library(data.table)
+library(ggplot2)
+library(dplyr)
+library(msigdbr)
+library(fgsea)
+library(ggridges)
+library(readxl)
+library(coin)
+library(dgof)
+library(ggExtra)
+library(ggpmisc)
+library(pheatmap)
+```
+
+# Preparing gtf for L1 motif counting
+
+```{r}
+gtf <- rtracklayer::readGFF("../genomes/Homo_sapiens.GRCh38.105.gtf")
+gtf$rownumber <- rownames(gtf)
+gtf_for_bedtools_map <- gtf[, c(1:8,27)]
+fwrite(gtf_for_bedtools_map, "../genomes/Homo_sapiens.GRCh38.for_bedtoolmap.gtf", sep = "\t", col.names = FALSE)
+```
+
+Fields must be tab-separated. Also, all but the final field in each
+feature line must contain a value; "empty" columns should be denoted
+with a '.'
+
+-   seqname - name of the chromosome or scaffold; chromosome names can
+    be given with or without the 'chr' prefix. Important note: the
+    seqname must be one used within Ensembl, i.e. a standard chromosome
+    name or an Ensembl identifier such as a scaffold ID, without any
+    additional content such as species or assembly. See the example GFF
+    output below.
+-   source - name of the program that generated this feature, or the
+    data source (database or project name)
+-   feature - feature type name, e.g. Gene, Variation, Similarity
+-   start - Start position\* of the feature, with sequence numbering
+    starting at 1.
+-   end - End position\* of the feature, with sequence numbering
+    starting at 1.
+-   score - A floating point value.
+-   strand - defined as + (forward) or - (reverse).
+-   frame - One of '0', '1' or '2'. '0' indicates that the first base of
+    the feature is the first base of a codon, '1' that the second base
+    is the first base of a codon, and so on..
+-   attribute - A semicolon-separated list of tag-value pairs, providing
+    additional information about each feature.
+
+## Importing results of homer
+
+```{r eval=FALSE}
+homer_results_human <- fread("./homer_results/count_motif_human.bed")
+
+colnames(homer_results_human) <- c("seqname", "source", "feature", "start", "end", 
+                                   "score", "strand", "frame", 
+                                   "rownumber","L1_motif_count_same", 
+                                   "L1_motif_count_opposite")
+```
+
+## Merge gtf annotation and homer results
+
+```{r}
+data <- merge(gtf, homer_results_human, by="rownumber")
+
+## testing merging
+summary(data$source.x == data$source.y)
+data$source.y <- NULL
+
+summary(data$start.x == data$start.y)
+data$start.y <- NULL
+
+summary(data$end.x == data$end.y)
+data$end.y <- NULL
+
+summary(data$score.x == data$score.y)
+data$score.y <- NULL
+
+summary(data$strand.x == data$strand.y)
+data$strand.y <- NULL
+
+## all is okay
+```
+
+```{r}
+AT_content <- fread("./homer_results/Homo_sapiens.GRCh38_AT_content.gtf")
+colnames(AT_content) <- c("seqname", "source", "feature", "start", "end", 
+                          "score", "strand", "frame", 
+                          "rownumber", "pct_at", "pct_gc", 
+                          "num_A", "num_C", "num_G", "num_T", "num_N", "num_oth", "seq_len")
+
+AT_content$rownumber <- as.numeric(AT_content$rownumber)
+data$rownumber <- as.integer(data$rownumber)
+
+data <- merge(AT_content, data, by="rownumber")
+
+rm(gtf)
+rm(AT_content)
+rm(homer_results_human)
+
+## testing merging
+summary(data$source.x == data$source)
+data$source.x <- NULL
+
+summary(data$start.x == data$start)
+data$start.x <- NULL
+
+summary(data$end.x == data$end)
+data$end.x <- NULL
+
+summary(data$score.x == data$score)
+data$score.x <- NULL
+
+summary(data$strand.x == data$strand)
+data$strand.x <- NULL
+
+summary(data$seqname.x == data$seqname.y)
+data$seqname.x <- NULL
+colnames(data)[colnames(data) == 'seqname.y'] <- 'seqname'
+data$seqname <- as.factor(data$seqname)
+all(data$seq_id == data$seqname)
+data$seqname <- NULL
+
+summary(data$phase == data$frame.y)
+data$frame.y <- NULL
+
+summary(data$type == data$feature.y)
+data$feature.y <- NULL
+## all is okay
+```
+
+# Add info about repeat content in the table
+
+
+```{r}
+total_RE_coverage <- fread("./repeat_content/Homo_sapiens.GRCh38_total_REcoverage.gtf")
+colnames(total_RE_coverage) <- c("seqname", "source", "feature", "start", "end", 
+                                   "score", "strand", "frame", 
+                                   "rownumber","RE_count", 
+                                   "number_of_covered_bases", "seqlen", "pct_coverage_total")
+
+L1_RE_coverage <- fread("./repeat_content/Homo_sapiens.GRCh38_L1_REcoverage.gtf")
+colnames(L1_RE_coverage) <- c("seqname", "source", "feature", "start", "end", 
+                                   "score", "strand", "frame", 
+                                   "rownumber","L1_count", 
+                                   "number_of_covered_bases_L1", "seqlen", "pct_coverage_L1")
+
+RE_coverage <- merge(total_RE_coverage, L1_RE_coverage)
+rm(total_RE_coverage)
+rm(L1_RE_coverage)
+
+
+SINE_RE_coverage <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/new_genomes/Homo_sapiens.GRCh38_SINE_REcoverage.gtf")
+colnames(SINE_RE_coverage) <- c("seqname", "source", "feature", "start", "end", 
+                                   "score", "strand", "frame", 
+                                   "rownumber","SINE_count", 
+                                   "number_of_covered_bases_SINE", "seqlen", "pct_coverage_SINE")
+
+RE_coverage <- merge(RE_coverage, SINE_RE_coverage)
+rm(SINE_RE_coverage)
+
+simpleR_RE_coverage <- fread("./repeat_content/Homo_sapiens.GRCh38_simpleR_REcoverage.gtf")
+colnames(simpleR_RE_coverage) <- c("seqname", "source", "feature", "start", "end", 
+                                   "score", "strand", "frame", 
+                                   "rownumber","simpleR_count", 
+                                   "number_of_covered_bases_simpleR", "seqlen", "pct_coverage_simpleR")
+
+RE_coverage <- merge(RE_coverage, simpleR_RE_coverage)
+rm(simpleR_RE_coverage)
+```
+
+```{r}
+data <- merge(data, RE_coverage, by = "rownumber")
+
+## Check if merging went okay 
+summary(data$start.x == data$start.y)
+summary(data$end.x == data$end.y)
+summary(data$source.x == data$source.y)
+rm(RE_coverage)
+
+data$start.y <- NULL
+data$end.y <- NULL
+data$source.y <- NULL
+data$score.y <- NULL 
+data$strand.y <- NULL
+```
+```{r}
+colnames(data) <- c("rownumber", "source","feature",  "start", "end", "score",  "strand", "frame", "pct_at", "pct_gc", "num_A", "num_C", "num_G", "num_T", "num_N", "num_oth",
+                    "seq_len", "seqid", "type", "phase", "gene_id", "gene_version", "gene_name", "gene_source", "gene_biotype", "transcript_id", 
+                    "transcript_version", "transcript_name",  "transcript_source", "transcript_biotype", "tag", "ccds_id", 
+                    "transcript_support_level",  "exon_number", "exon_id", "exon_version", "protein_id", "protein_version", 
+                    "L1_motif_count_same", "L1_motif_count_opposite", "seqname", "feature" ,"frame", "seqlen", "RE_count", 
+                    "number_of_covered_bases", "pct_coverage_total", "L1_count", "number_of_covered_bases_L1", "pct_coverage_L1", 
+                    "SINE_count", "number_of_covered_bases_SINE", "pct_coverage_SINE",  "simpleR_count", "number_of_covered_bases_simpleR", "pct_coverage_simpleR")
+
+```
+
+```{r}
+data[type == "exon", exon_count := .N, by=transcript_id]
+data[, exon_count := exon_count[!is.na(exon_count)][1L] , by = transcript_id]
+```
+
+
+```{r}
+fwrite(data, "./homer_results/homer_results_human.gtf")
+```
+
+# Analysis
+
+```{r}
+data <- fread("./homer_results/homer_results_human.gtf")
+```
+
+## Calculating CDS, mRNA and DNA length for the transcripts
+
+```{r}
+protein_coding_genes <- data[data$gene_biotype == "protein_coding", ]
+protein_coding_genes$type <- as.factor(protein_coding_genes$type)
+#levels(protein_coding_genes$type)
+
+setDT(protein_coding_genes)
+
+## calculating the length of features
+protein_coding_genes$feature_length <- protein_coding_genes$end - protein_coding_genes$start  + 1
+
+## check if calculation is correct
+summary(protein_coding_genes$feature_length == protein_coding_genes$seq_len)
+
+protein_coding_genes <- protein_coding_genes[protein_coding_genes$type == "CDS", CDS_length := sum(feature_length), by = transcript_id]
+protein_coding_genes[, CDS_length := CDS_length[!is.na(CDS_length)][1L] , by = transcript_id]
+
+protein_coding_genes <- protein_coding_genes[protein_coding_genes$type == "exon", mRNA_length := sum(feature_length), by = transcript_id]
+protein_coding_genes[, mRNA_length := mRNA_length[!is.na(mRNA_length)][1L] , by = transcript_id]
+
+protein_coding_genes <- protein_coding_genes[protein_coding_genes$type == "transcript", DNA_length := sum(feature_length), by = transcript_id]
+protein_coding_genes[, DNA_length := DNA_length[!is.na(DNA_length)][1L] , by = transcript_id]
+
+protein_coding_genes <- protein_coding_genes[protein_coding_genes$type == "five_prime_utr", five_prime_length := sum(feature_length), by = transcript_id]
+protein_coding_genes[, five_prime_length := five_prime_length[!is.na(five_prime_length)][1L] , by = transcript_id]
+protein_coding_genes[is.na(five_prime_length), five_prime_length := 0, ]
+
+protein_coding_genes <- protein_coding_genes[protein_coding_genes$type == "three_prime_utr", three_prime_length := sum(feature_length), by = transcript_id]
+protein_coding_genes[, three_prime_length := three_prime_length[!is.na(three_prime_length)][1L] , by = transcript_id]
+protein_coding_genes[is.na(three_prime_length), three_prime_length := 0, ]
+
+protein_coding_genes$cds_to_total_length_ratio <- protein_coding_genes$CDS_length / protein_coding_genes$DNA_length * 100
+protein_coding_genes$cds_to_mRNA_length_ratio <- protein_coding_genes$CDS_length / protein_coding_genes$mRNA_length * 100
+```
+
+## Calculating the L1 motif count per same and opposite strands in different gene parts
+
+```{r}
+protein_coding_genes[protein_coding_genes$type == "CDS", CDS_L1_motif_count_same_strand := sum(L1_motif_count_same), by = transcript_id]
+protein_coding_genes[, CDS_L1_motif_count_same_strand := CDS_L1_motif_count_same_strand[!is.na(CDS_L1_motif_count_same_strand)][1L] , by = transcript_id]
+
+protein_coding_genes[protein_coding_genes$type == "exon", mRNA_L1_motif_count_same_strand := sum(L1_motif_count_same), by = transcript_id]
+protein_coding_genes[, mRNA_L1_motif_count_same_strand := mRNA_L1_motif_count_same_strand[!is.na(mRNA_L1_motif_count_same_strand)][1L] , by = transcript_id]
+
+protein_coding_genes[protein_coding_genes$type == "transcript", DNA_L1_motif_count_same_strand := sum(L1_motif_count_same), by = transcript_id]
+protein_coding_genes[, DNA_L1_motif_count_same_strand := DNA_L1_motif_count_same_strand[!is.na(DNA_L1_motif_count_same_strand)][1L] , by = transcript_id]
+
+protein_coding_genes[protein_coding_genes$type == "five_prime_utr" & seq_len > 10, five_prime_utr_L1_motif_count_same_strand := sum(L1_motif_count_same), by = transcript_id]
+protein_coding_genes[, five_prime_utr_L1_motif_count_same_strand := five_prime_utr_L1_motif_count_same_strand[!is.na(five_prime_utr_L1_motif_count_same_strand)][1L] , by = transcript_id]
+
+protein_coding_genes[protein_coding_genes$type == "three_prime_utr" & seq_len > 10, three_prime_utr_L1_motif_count_same_strand := sum(L1_motif_count_same), by = transcript_id]
+protein_coding_genes[, three_prime_utr_L1_motif_count_same_strand := three_prime_utr_L1_motif_count_same_strand[!is.na(three_prime_utr_L1_motif_count_same_strand)][1L] , by = transcript_id]
+```
+
+```{r}
+protein_coding_genes[protein_coding_genes$type == "CDS", CDS_L1_motif_count_opposite_strand := sum(L1_motif_count_opposite), by = transcript_id]
+protein_coding_genes[, CDS_L1_motif_count_opposite_strand := CDS_L1_motif_count_opposite_strand[!is.na(CDS_L1_motif_count_opposite_strand)][1L] , by = transcript_id]
+
+protein_coding_genes[protein_coding_genes$type == "exon", mRNA_L1_motif_count_opposite_strand := sum(L1_motif_count_opposite), by = transcript_id]
+protein_coding_genes[, mRNA_L1_motif_count_opposite_strand := mRNA_L1_motif_count_opposite_strand[!is.na(mRNA_L1_motif_count_opposite_strand)][1L] , by = transcript_id]
+
+protein_coding_genes[protein_coding_genes$type == "transcript", DNA_L1_motif_count_opposite_strand := sum(L1_motif_count_opposite), by = transcript_id]
+protein_coding_genes[, DNA_L1_motif_count_opposite_strand := DNA_L1_motif_count_opposite_strand[!is.na(DNA_L1_motif_count_opposite_strand)][1L] , by = transcript_id]
+
+protein_coding_genes[protein_coding_genes$type == "five_prime_utr" & seq_len > 10, five_prime_utr_L1_motif_count_opposite_strand := sum(L1_motif_count_opposite), by = transcript_id]
+protein_coding_genes[, five_prime_utr_L1_motif_count_opposite_strand := five_prime_utr_L1_motif_count_opposite_strand[!is.na(five_prime_utr_L1_motif_count_opposite_strand)][1L] , by = transcript_id]
+
+protein_coding_genes[protein_coding_genes$type == "three_prime_utr" & seq_len > 10, three_prime_utr_L1_motif_count_opposite_strand := sum(L1_motif_count_opposite), by = transcript_id]
+protein_coding_genes[, three_prime_utr_L1_motif_count_opposite_strand := three_prime_utr_L1_motif_count_opposite_strand[!is.na(three_prime_utr_L1_motif_count_opposite_strand)][1L] , by = transcript_id]
+```
+
+## Calculating number of protein coding transcripts
+
+```{r}
+protein_coding_genes$transcript_biotype <- as.factor(protein_coding_genes$transcript_biotype)
+
+print("levels(protein_coding_genes$transcript_biotype)")
+levels(protein_coding_genes$transcript_biotype)
+
+protein_coding_genes[type == "transcript" & transcript_biotype == "protein_coding", 
+                     number_of_protein_coding_transcripts := .N, by = gene_id]
+
+print("summary of number_of_protein_coding_transcripts")
+summary(protein_coding_genes[protein_coding_genes$type == "transcript" & protein_coding_genes$transcript_biotype == "protein_coding", number_of_protein_coding_transcripts])
+#protein_coding_genes[protein_coding_genes$type == "transcript" & protein_coding_genes$transcript_biotype == "protein_coding", .N, by = gene_id]
+```
+
+## Calculating number of other transcripts
+
+-   TEC To be Experimentally Confirmed. This is used for non-spliced EST
+    clusters that have polyA features. This category has been
+    specifically created for the ENCODE project to highlight regions
+    that could indicate the presence of protein coding genes that
+    require experimental validation, either by 5' RACE or RT-PCR to
+    extend the transcripts, or by confirming expression of the
+    putatively-encoded peptide with specific antibodies.
+-   nonsense_mediated_decay If the coding sequence (following the
+    appropriate reference) of a transcript finishes \>50bp from a
+    downstream splice site then it is tagged as NMD. If the variant does
+    not cover the full reference coding sequence then it is annotated as
+    NMD if NMD is unavoidable i.e. no matter what the exon structure of
+    the missing portion is the transcript will be subject to NMD.
+-   non_stop_decay Transcript that has polyA features (including signal)
+    without a prior stop codon in the CDS, i.e. a non-genomic polyA tail
+    attached directly to the CDS without 3' UTR. These transcripts are
+    subject to degradation.
+-   retained_intron Alternatively spliced transcript believed to contain
+    intronic sequence relative to other, coding, variants.
+-   protein_coding Contains an open reading frame (ORF).
+-   processed_transcript Doesn't contain an ORF.
+
+```{r}
+protein_coding_genes[protein_coding_genes$type == "transcript" & protein_coding_genes$transcript_biotype == "non_stop_decay", 
+                     number_of_non_stop_decay_transcripts := .N, by = gene_id]
+protein_coding_genes[, number_of_non_stop_decay_transcripts := number_of_non_stop_decay_transcripts[!is.na(number_of_non_stop_decay_transcripts)][1L] , by = gene_id]
+
+protein_coding_genes[protein_coding_genes$type == "transcript" & protein_coding_genes$transcript_biotype == "nonsense_mediated_decay",
+                     number_of_nonsense_mediated_decay_transcripts := .N, by = gene_id]
+protein_coding_genes[, number_of_nonsense_mediated_decay_transcripts :=
+                       number_of_nonsense_mediated_decay_transcripts[!is.na(number_of_nonsense_mediated_decay_transcripts)][1L] , by = gene_id]
+
+
+protein_coding_genes[protein_coding_genes$type == "transcript" & protein_coding_genes$transcript_biotype == "processed_transcript", 
+                     number_of_processed_transcripts := .N, by = gene_id]
+protein_coding_genes[,  number_of_processed_transcripts :=  number_of_processed_transcripts[!is.na( number_of_processed_transcripts)][1L] , by = gene_id]
+
+protein_coding_genes[type == "transcript" & transcript_biotype == "retained_intron", 
+                     number_of_retained_intron_transcripts := .N, by = gene_id]
+protein_coding_genes[,number_of_retained_intron_transcripts :=  number_of_retained_intron_transcripts[!is.na(number_of_retained_intron_transcripts )][1L] , by = gene_id]
+```
+
+## Extracting longest transcripts
+
+```{r}
+protein_coding_transcripts <- protein_coding_genes[type == "transcript" & transcript_biotype == "protein_coding", ]
+#protein_coding_transcripts <- protein_coding_transcripts[num_N == 0, ]
+
+only_longest_transcripts <- protein_coding_transcripts[protein_coding_transcripts[, .I[which.max(CDS_length)], by=gene_id]$V1]
+only_longest_transcripts$seqid <- as.factor(only_longest_transcripts$seqid)
+only_longest_transcripts$source <- as.factor(only_longest_transcripts$source)
+only_longest_transcripts$type <- as.factor(only_longest_transcripts$type)
+
+longest_transcripts <- only_longest_transcripts[, c("gene_id", "transcript_id")]
+fwrite(as.data.frame(longest_transcripts), "longest_CDS.list")
+## Are all genes unique in the table?
+length(unique(only_longest_transcripts$gene_id)) == nrow(only_longest_transcripts)
+
+#t(only_longest_transcripts[gene_name == "FHIT", ])
+#protein_coding_genes[gene_id == "ENSG00000189283" & feature == "transcript" & transcript_biotype == "protein_coding", ]
+
+#protein_coding_transcripts[gene_id == "ENSG00000189283" & feature == "transcript" & transcript_biotype == "protein_coding", ]
+```
+
+## MANE selected transcripts
+
+<https://www.ensembl.org/Help/Faq?id=276>
+<https://www.nature.com/articles/s41598-020-73081-5>
+
+```{r}
+MANE_transcripts <- rtracklayer::readGFF("./gene_sets/MANE.GRCh38.v1.0.ensembl_genomic.gtf")
+MANE_transcripts_selected <- MANE_transcripts[MANE_transcripts$type == "transcript" & 
+                                                MANE_transcripts$gene_type == "protein_coding" & 
+                                                MANE_transcripts$transcript_type == "protein_coding" & 
+                                                MANE_transcripts$tag == "MANE_Select", ]
+
+length(unique(MANE_transcripts_selected$gene_id)) == nrow(MANE_transcripts_selected)
+
+MANE_transcripts_selected$gene_id <- sapply(MANE_transcripts_selected$gene_id, function(x) strsplit(x, "[.]")[[1]][1])
+MANE_transcripts_selected$transcript_id <- sapply(MANE_transcripts_selected$transcript_id, function(x) strsplit(x, "[.]")[[1]][1])
+
+
+only_MANE_transcripts <- protein_coding_transcripts[protein_coding_transcripts$transcript_id %in% MANE_transcripts_selected$transcript_id, ]
+```
+
+Using MANE transcirpt change the overall picture, but only because it have less genes!
+
+```{r}
+## intersection between longest transcripts and MANE transcripts
+length(intersect(only_longest_transcripts$gene_id, only_MANE_transcripts$gene_id))
+## 15358
+
+length(intersect(only_longest_transcripts$transcript_id, only_MANE_transcripts$transcript_id))
+## 11805
+
+## not equal transcripts
+not_equal_genes <- only_longest_transcripts[gene_id %in% only_MANE_transcripts$gene_id, c("gene_id", "transcript_id")]
+not_equal_genes <- merge(not_equal_genes, only_MANE_transcripts[, c("gene_id", "transcript_id")], by = "gene_id")
+
+nrow(not_equal_genes[transcript_id.x != transcript_id.y, ])
+## 3553
+
+not_equal_genes_names <- not_equal_genes[transcript_id.x != transcript_id.y, gene_id]
+```
+
+## Calculating total L1 motif count
+
+```{r}
+only_longest_transcripts$CDS_L1_motif_count_total <- only_longest_transcripts$CDS_L1_motif_count_same_strand + only_longest_transcripts$CDS_L1_motif_count_opposite_strand 
+only_longest_transcripts$mRNA_L1_motif_count_total <- only_longest_transcripts$mRNA_L1_motif_count_same_strand + only_longest_transcripts$mRNA_L1_motif_count_opposite_strand 
+only_longest_transcripts$DNA_L1_motif_count_total <- only_longest_transcripts$DNA_L1_motif_count_same_strand + only_longest_transcripts$DNA_L1_motif_count_opposite_strand
+only_longest_transcripts$five_prime_utr_L1_motif_count_total <- only_longest_transcripts$five_prime_utr_L1_motif_count_same_strand + only_longest_transcripts$five_prime_utr_L1_motif_count_opposite_strand
+only_longest_transcripts$three_prime_utr_L1_motif_count_total <-  only_longest_transcripts$three_prime_utr_L1_motif_count_same_strand + only_longest_transcripts$three_prime_utr_L1_motif_count_opposite_strand
+
+only_MANE_transcripts$CDS_L1_motif_count_total <- only_MANE_transcripts$CDS_L1_motif_count_same_strand + only_MANE_transcripts$CDS_L1_motif_count_opposite_strand 
+only_MANE_transcripts$mRNA_L1_motif_count_total <- only_MANE_transcripts$mRNA_L1_motif_count_same_strand + only_MANE_transcripts$mRNA_L1_motif_count_opposite_strand 
+only_MANE_transcripts$DNA_L1_motif_count_total <- only_MANE_transcripts$DNA_L1_motif_count_same_strand + only_MANE_transcripts$DNA_L1_motif_count_opposite_strand
+only_MANE_transcripts$five_prime_utr_L1_motif_count_total <- only_MANE_transcripts$five_prime_utr_L1_motif_count_same_strand + only_MANE_transcripts$five_prime_utr_L1_motif_count_opposite_strand
+only_MANE_transcripts$three_prime_utr_L1_motif_count_total <-  only_MANE_transcripts$three_prime_utr_L1_motif_count_same_strand + only_MANE_transcripts$three_prime_utr_L1_motif_count_opposite_strand
+```
+
+## Normalization
+
+```{r}
+only_longest_transcripts$L1motif_count_per_1kb <- only_longest_transcripts$DNA_L1_motif_count_total / only_longest_transcripts$DNA_length * 1000
+
+only_longest_transcripts$L1motif_count_per_1kb_same_strand <- only_longest_transcripts$DNA_L1_motif_count_same_strand / only_longest_transcripts$DNA_length * 1000
+only_longest_transcripts$L1motif_count_per_1kb_opposite_strand <- only_longest_transcripts$DNA_L1_motif_count_opposite_strand / only_longest_transcripts$DNA_length * 1000
+
+only_longest_transcripts$norm_five_prime_utr_L1_motif_count <- only_longest_transcripts$five_prime_utr_L1_motif_count_total / only_longest_transcripts$five_prime_length * 1000
+only_longest_transcripts$norm_three_prime_utr_L1_motif_count <- only_longest_transcripts$three_prime_utr_L1_motif_count_total / only_longest_transcripts$three_prime_length * 1000
+
+only_longest_transcripts$norm_CDS_L1_motif_count <- only_longest_transcripts$CDS_L1_motif_count_total / only_longest_transcripts$CDS_length * 1000
+
+only_MANE_transcripts$L1motif_count_per_1kb <- only_MANE_transcripts$DNA_L1_motif_count_total / only_MANE_transcripts$DNA_length * 1000
+
+only_MANE_transcripts$L1motif_count_per_1kb_same_strand <- only_MANE_transcripts$DNA_L1_motif_count_same_strand / only_MANE_transcripts$DNA_length * 1000
+only_MANE_transcripts$L1motif_count_per_1kb_opposite_strand <- only_MANE_transcripts$DNA_L1_motif_count_opposite_strand / only_MANE_transcripts$DNA_length * 1000
+
+only_MANE_transcripts$norm_five_prime_utr_L1_motif_count <- only_MANE_transcripts$five_prime_utr_L1_motif_count_total / only_MANE_transcripts$five_prime_length * 1000
+only_MANE_transcripts$norm_three_prime_utr_L1_motif_count <- only_MANE_transcripts$three_prime_utr_L1_motif_count_total / only_MANE_transcripts$three_prime_length * 1000
+
+only_MANE_transcripts$norm_CDS_L1_motif_count <- only_MANE_transcripts$CDS_L1_motif_count_total / only_MANE_transcripts$CDS_length * 1000
+```
+
+## Antisense to sense L1 motif count ratio
+
+```{r}
+only_longest_transcripts$ratio <- only_longest_transcripts$L1motif_count_per_1kb_opposite_strand / only_longest_transcripts$L1motif_count_per_1kb_same_strand
+only_longest_transcripts[ratio == "Inf", ratio := NA]
+```
+
+```{r}
+summary(only_longest_transcripts$ratio)
+#colnames(only_longest_transcripts)
+only_longest_transcripts$feature <- NULL
+only_longest_transcripts$frame <- NULL
+
+ggplot(only_longest_transcripts, aes(x=ratio))+
+  geom_histogram(binwidth = 0.1, fill = "salmon") +
+  theme_bw()
+```
+
+### Nice plot for antisense and sense L1 motifs
+
+Using MANE transcirpt change the overall picture, but only because it have less genes!
+
+```{r}
+tmp <- only_longest_transcripts[, c("L1motif_count_per_1kb_opposite_strand","L1motif_count_per_1kb_same_strand")]
+tmp <- melt.data.table(tmp, measure.vars = 1:2)
+
+summ <- tmp %>% 
+  group_by(variable) %>% 
+  summarize(min = min(value), max = max(value), 
+            mean = mean(value), q1= quantile(value, probs = 0.25), 
+            median = median(value), q3= quantile(value, probs = 0.75),
+            sd = sd(value)) %>%
+  mutate_if(is.numeric, round, digits=2)
+
+setDT(summ)
+summ[variable == "L1motif_count_per_1kb_opposite_strand", variable := "antisense"]
+summ[variable == "L1motif_count_per_1kb_same_strand", variable := "sense"]
+
+ggplot(tmp, aes(x=value, fill = variable))+
+  scale_fill_hue(labels = c("Antisense", "Sense")) +
+  geom_histogram(binwidth = 0.1, alpha = 0.8) +
+  theme_bw() +
+  labs(x="L1 motif count per 1 kb", fill = "Strand", title = "Longest CDS transcripts coordinates as gene coordinates")+
+  theme(legend.position = c(0.8, 0.2)) +
+  geom_table_npc(data = summ, label = list(summ), npcx = 0.00, npcy = 1, hjust = -0.6, vjust = 1.5, 
+                 table.theme = ttheme_gtlight)
+
+ggplot(tmp, aes(x=value, fill = variable))+
+  scale_fill_manual(values=c("#E69F00", "#56B4E9"), labels = c("Antisense", "Sense")) +
+  geom_histogram(position="identity", binwidth = 0.1, alpha = 0.8) +
+  theme_bw() +
+  labs(x="L1 motif count per 1 kb", fill = "Orientation")+
+  theme(legend.position = c(0.8, 0.8),
+        axis.text.x = element_text(face="bold", size=17),
+        axis.text.y = element_text(face="bold", size=17), 
+        axis.title = element_text(face="bold", size=17),
+        legend.title = element_text(face="bold", size=17),
+        legend.text = element_text(face="bold", size=17))
+
+wilcox.test(x=only_longest_transcripts$L1motif_count_per_1kb_opposite_strand,
+              y=only_longest_transcripts$L1motif_count_per_1kb_same_strand, paired = TRUE)
+
+summary(only_longest_transcripts$L1motif_count_per_1kb)
+summary(only_longest_transcripts$L1motif_count_per_1kb_opposite_strand)
+summary(only_longest_transcripts$L1motif_count_per_1kb_same_strand)
+```
+
+```{r}
+tmp <- only_MANE_transcripts[, c("L1motif_count_per_1kb_opposite_strand","L1motif_count_per_1kb_same_strand")]
+tmp <- melt.data.table(tmp, measure.vars = 1:2)
+
+summ <- tmp %>% 
+  group_by(variable) %>% 
+  summarize(min = min(value), max = max(value), 
+            mean = mean(value), q1= quantile(value, probs = 0.25), 
+            median = median(value), q3= quantile(value, probs = 0.75),
+            sd = sd(value)) %>%
+  mutate_if(is.numeric, round, digits=2)
+
+setDT(summ)
+summ[variable == "L1motif_count_per_1kb_opposite_strand", variable := "antisense"]
+summ[variable == "L1motif_count_per_1kb_same_strand", variable := "sense"]
+
+ggplot(tmp, aes(x=value, fill = variable))+
+  scale_fill_hue(labels = c("Antisense", "Sense")) +
+  geom_histogram(binwidth = 0.1, alpha = 0.8) +
+  theme_bw() +
+  labs(x="L1 motif count per 1 kb", fill = "Strand", title = "MANE transcripts coordinates as gene coordinates")+
+  theme(legend.position = c(0.8, 0.2)) +
+  geom_table_npc(data = summ, label = list(summ), npcx = 0.00, npcy = 1, hjust = -0.6, vjust = 1.5, 
+                 table.theme = ttheme_gtlight)
+```
+
+```{r}
+tmp <- only_longest_transcripts[gene_id %in% not_equal_genes$gene_id, c("L1motif_count_per_1kb_opposite_strand","L1motif_count_per_1kb_same_strand")]
+tmp <- melt.data.table(tmp, measure.vars = 1:2)
+
+summ <- tmp %>% 
+  group_by(variable) %>% 
+  summarize(min = min(value), max = max(value), 
+            mean = mean(value), q1= quantile(value, probs = 0.25), 
+            median = median(value), q3= quantile(value, probs = 0.75),
+            sd = sd(value)) %>%
+  mutate_if(is.numeric, round, digits=2)
+
+setDT(summ)
+summ[variable == "L1motif_count_per_1kb_opposite_strand", variable := "antisense"]
+summ[variable == "L1motif_count_per_1kb_same_strand", variable := "sense"]
+
+ggplot(tmp, aes(x=value, fill = variable))+
+  scale_fill_hue(labels = c("Antisense", "Sense")) +
+  geom_histogram(binwidth = 0.1, alpha = 0.8) +
+  theme_bw() +
+  labs(x="L1 motif count per 1 kb", fill = "Strand", title = "Longest CDS transcripts coordinates as gene coordinates, \n
+       but only for shared genes with MANE")+
+  theme(legend.position = c(0.8, 0.2)) +
+  geom_table_npc(data = summ, label = list(summ), npcx = 0.00, npcy = 1, hjust = -0.6, vjust = 1.5, 
+                 table.theme = ttheme_gtlight)
+```
+
+
+# AT content and L1 motif density
+
+Is L1 motif density absolutely correlate with AT content of gene?
+
+```{r}
+ggplot(only_longest_transcripts, aes(x = `pct_at`, y=L1motif_count_per_1kb))+
+  geom_point(colour= "#228B22", alpha = 0.4) +
+  theme_bw() +
+  xlab("AT_content") +
+  ylab("L1 motif count per 1 kb") + 
+  ggpubr::stat_cor()
+```
+
+
+## Nice plot for AT content and L1 motif density correlation
+```{r}
+point_plot <- ggplot(only_longest_transcripts, aes(x = `pct_at`, y=L1motif_count_per_1kb))+
+  geom_bin_2d( alpha = 0.7, bins = 200) +
+  scale_fill_continuous(type = "viridis", guide = guide_legend()) +
+  theme_bw() +
+  theme(legend.position = c(0.1,0.5)) +
+  xlab("AT content") +
+  ylab("L1 motif count per 1 kb") + 
+  ggpubr::stat_cor()
+
+AT_density_plot <- ggplot(only_longest_transcripts, aes(x = pct_at))+
+  geom_density(colour = "blue", fill = "lightblue", alpha = 0.7) +
+  theme_bw() +
+  xlab("AT_content")
+
+L1_motif_density_plot <- ggplot(only_longest_transcripts, aes(y = L1motif_count_per_1kb))+
+  geom_density(colour = "blue", fill = "lightblue", alpha = 0.7) +
+  theme_bw() +
+  ylab("L1 motif count per 1 kb")
+
+  
+blankPlot <- ggplot()+geom_blank(aes(1,1))+
+  theme(plot.background = element_blank(), 
+   panel.grid.major = element_blank(),
+   panel.grid.minor = element_blank(), 
+   panel.border = element_blank(),
+   panel.background = element_blank(),
+   axis.title.x = element_blank(),
+   axis.title.y = element_blank(),
+   axis.text.x = element_blank(), 
+   axis.text.y = element_blank(),
+   axis.ticks = element_blank()
+     )
+
+
+gridExtra::grid.arrange(AT_density_plot, blankPlot, point_plot, L1_motif_density_plot, 
+        ncol=2, nrow=2, widths=c(5, 1.4), heights=c(5, 10))
+```
+
+## Gene lenght and intron persentage
+
+Does the AT content and L1motif density correlate with length of genes and intron percentage in them?
+
+
+```{r}
+only_longest_transcripts$intron_percentage <- (only_longest_transcripts$DNA_length - only_longest_transcripts$mRNA_length) / 
+  only_longest_transcripts$DNA_length  * 100
+
+ggplot(only_longest_transcripts, 
+       aes(y = `pct_at`, x = DNA_length))+
+  geom_bin_2d( alpha = 0.7, bins = 200) +
+  scale_fill_continuous(type = "viridis", guide = guide_legend()) +
+  theme_bw() +
+  ylab("AT_content") +
+  xlab("DNA_length of the transcript") +
+  ggpubr::stat_cor()
+
+ggplot(only_longest_transcripts, aes(y = `pct_at`, 
+                                     x = (DNA_length - mRNA_length) / DNA_length ))+
+  geom_bin_2d( alpha = 0.7, bins = 200) +
+  scale_fill_continuous(type = "viridis", guide = guide_legend()) +
+  theme_bw() +
+  ylab("AT_content") +
+  xlab("Intron percentage") +
+  ggpubr::stat_cor()
+
+ggplot(only_longest_transcripts, 
+       aes(y = L1motif_count_per_1kb, x = DNA_length))+
+  geom_bin_2d( alpha = 0.7, bins = 200) +
+  scale_fill_continuous(type = "viridis", guide = guide_legend()) +
+  theme_bw() +
+  ylab("L1motif_count_per_1kb") +
+  xlab("DNA_length of the transcript") +
+  ggpubr::stat_cor()
+
+ggplot(only_longest_transcripts, aes(y = L1motif_count_per_1kb, 
+                                     x = (DNA_length - mRNA_length) / DNA_length ))+
+  geom_bin_2d( alpha = 0.7, bins = 200) +
+  scale_fill_continuous(type = "viridis", guide = guide_legend()) +
+  theme_bw() +
+  ylab("L1motif_count_per_1kb") +
+  xlab("Intron percentage") +
+  ggpubr::stat_cor()
+```
+
+# Variable correlations
+
+```{r}
+cormat <- Hmisc::rcorr(as.matrix(only_longest_transcripts[, c("pct_at","exon_count",
+                                                "RE_count", "pct_coverage_total", "L1_count", "pct_coverage_L1", "SINE_count", "pct_coverage_SINE", 
+                                                "simpleR_count", "pct_coverage_simpleR", "CDS_length", "mRNA_length", "DNA_length", "five_prime_length",
+                                                "three_prime_length", "cds_to_total_length_ratio", "cds_to_mRNA_length_ratio",
+                                                "number_of_protein_coding_transcripts", "number_of_non_stop_decay_transcripts", 
+                                                "number_of_nonsense_mediated_decay_transcripts", "number_of_processed_transcripts",
+                                                "number_of_retained_intron_transcripts", "L1motif_count_per_1kb")]))
+
+cormat[lower.tri(cormat)] <- NA
+
+cormat_coef <- as.data.frame(cormat$r, na.rm = TRUE)
+cormat_coef$feature <- rownames(cormat_coef)
+
+melted_cormat <- reshape2::melt(cormat_coef)
+
+ggplot(melted_cormat, aes(feature, variable, fill= value)) + 
+  geom_tile()+
+  scale_fill_gradient2(low="blue", high="red", mid = "white")
+
+pheatmap(as.data.frame(cormat$r, na.rm = TRUE))
+
+
+at_content_L1s <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/new_genomes/AT_content_L1s.tsv")
+summary(at_content_L1s$`7_pct_at`)
+
+at_content_SINEs <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/new_genomes/AT_content_SINEs.tsv")
+summary(at_content_SINEs$`7_pct_at`)
+
+
+```
+
+
+# L1 motif density in 3' and 5' UTR
+
+## Add intron features to the table
+
+```{r}
+## first exon
+data$feature <- data$type
+
+data_exons <- data[feature == "exon", ]
+data_exons[data_exons[,do.call(order, .SD), .SDcols = c("transcript_id", "exon_number")]]
+colnames(data_exons)[colnames(data_exons) == 'strand.x'] <- 'strand'
+colnames(data_exons)[colnames(data_exons) == 'start.x'] <- 'start'
+colnames(data_exons)[colnames(data_exons) == 'end.x'] <- 'end'
+colnames(data_exons)[colnames(data_exons) == 'source.x'] <- 'source'
+colnames(data_exons)[colnames(data_exons) == 'score.x'] <- 'score'
+data_exons[exon_number == 1 & strand == "+", promoter_coordinate_start := start - 10001]
+data_exons[exon_number == 1 & strand == "+", promoter_coordinate_end := start - 1]
+
+
+data_exons[exon_number == 1 & strand == "-", promoter_coordinate_start := end + 1]
+data_exons[exon_number == 1 & strand == "-", promoter_coordinate_end := end + 10001]
+
+## last exon
+data_exons[feature == "exon", exon_count := .N, by=transcript_id]
+
+data_exons[exon_number == exon_count & strand == "+", tail_coordinate_start := end + 1]
+data_exons[exon_number == exon_count & strand == "+", tail_coordinate_end := end + 1000]
+
+data_exons[exon_number == exon_count & strand == "-", tail_coordinate_start := start - 1000]
+data_exons[exon_number == exon_count & strand == "-", tail_coordinate_end := start-1]
+
+## intermediate exons
+setDT(data)
+
+data_exons[exon_number > 1 & strand == "+", intron_coordinate_end := start-1]
+data_exons[strand == "+", upstream_exon_end := lag(end), by = transcript_id] # не ставь сюда exon_number > 1, потому что не узнаешь конец 1 экзона
+data_exons[exon_number > 1 & strand == "+", intron_coordinate_start := upstream_exon_end + 1]
+data_exons[exon_number > 1 & strand == "+", intron_length := intron_coordinate_end - intron_coordinate_start + 1]
+
+data_exons[exon_number > 1 & strand == "-", intron_coordinate_start := end + 1]
+data_exons[strand == "-", upstream_exon_end := lag(start), by = transcript_id]
+data_exons[exon_number > 1 & strand == "-", intron_coordinate_end := upstream_exon_end - 1]
+data_exons[exon_number > 1 & strand == "-", intron_length := intron_coordinate_end - intron_coordinate_start + 1]
+
+summary(data_exons$intron_length > 0, )
+
+intermediate_exons <- data_exons[transcript_id %in% only_longest_transcripts$transcript_id & exon_number !=1 & exon_number != exon_count, ]
+intermediate_exons$start_for_bed <- intermediate_exons$start - 1
+data_exons$start_for_bed <- data_exons$start - 1
+
+
+## total number of exons in only_longest_transcripts
+nrow(data_exons[transcript_id %in% only_longest_transcripts$transcript_id, ]) == sum(only_longest_transcripts$exon_count)
+## number of intermediate exons
+nrow(intermediate_exons)
+
+## number of exons in monoexonic genes
+nrow(data_exons[transcript_id %in% only_longest_transcripts$transcript_id & exon_number == 1 & exon_count == 1, ])
+
+## number of last exons
+nrow(data_exons[transcript_id %in% only_longest_transcripts$transcript_id & exon_count != 1 & exon_count == exon_number, ])
+
+## number of first exons
+nrow(data_exons[transcript_id %in% only_longest_transcripts$transcript_id & exon_number == 1 & exon_count != 1, ])
+
+fwrite(intermediate_exons, "only_longest_transcripts_intermediate_exons.tsv")
+
+sum(only_longest_transcripts$exon_count) == nrow(intermediate_exons) + 
+  nrow(data_exons[transcript_id %in% only_longest_transcripts$transcript_id & exon_number == 1 & exon_count == 1, ]) +
+  nrow(data_exons[transcript_id %in% only_longest_transcripts$transcript_id & exon_count != 1 & exon_count == exon_number, ]) + 
+  nrow(data_exons[transcript_id %in% only_longest_transcripts$transcript_id & exon_number == 1 & exon_count != 1, ])
+
+
+```
+
+```{r}
+fwrite(intermediate_exons[, c("seqid", "start_for_bed", "end", "exon_id", "score", "strand")], 
+       "./bed_files_for_metaplots/only_longest_transcripts_intermedite_exons.bed", sep = "\t", col.names = FALSE, scipen = 10)
+
+fwrite(data_exons[transcript_id %in% only_longest_transcripts$transcript_id & exon_number == 1 & exon_count != 1, 
+                  c("seqid", "start_for_bed", "end", "exon_id", "score", "strand")], 
+       "./bed_files_for_metaplots/only_longest_transcripts_first_exons.bed", sep = "\t", col.names = FALSE, scipen = 10)
+
+fwrite(data_exons[transcript_id %in% only_longest_transcripts$transcript_id & exon_count != 1 & exon_count == exon_number, 
+                  c("seqid", "start_for_bed", "end", "exon_id", "score", "strand")], 
+       "./bed_files_for_metaplots/only_longest_transcripts_last_exons.bed", sep = "\t", col.names = FALSE, scipen = 10)
+
+fwrite(data_exons[transcript_id %in% only_longest_transcripts$transcript_id & exon_number == 1 & exon_count == 1, 
+                  c("seqid", "start_for_bed", "end", "exon_id", "score", "strand")], 
+       "./bed_files_for_metaplots/only_longest_transcripts_monoexonic_exons.bed", sep = "\t", col.names = FALSE, scipen = 10)
+
+only_longest_transcripts$start_for_bed <- only_longest_transcripts$start - 1
+
+fwrite(only_longest_transcripts[, c("seqid", "start_for_bed", "end", "transcript_id", "score", "strand")], 
+       "./bed_files_for_metaplots/only_longest_transcripts_transcripts.bed", sep = "\t", col.names = FALSE, scipen = 10)
+```
+
+## Preparing gtf file
+
+```{r}
+inner_introns <- data_exons[exon_number > 1 & exon_number < exon_count, c("seqid", "source", "feature", 
+                                                                          "intron_coordinate_start", "intron_coordinate_end", "score", "strand", 
+                                                                          "phase", "exon_id", "transcript_id", "exon_number", "exon_count", "intron_length")]
+inner_introns <- unique(inner_introns)
+inner_introns$feature <- "intron"
+summary(inner_introns$intron_coordinate_start < inner_introns$intron_coordinate_end)
+summary(inner_introns$intron_length > 0, )
+
+#summary(duplicated(inner_introns))
+inner_introns <- inner_introns[inner_introns$intron_length > 3, ]
+summary(inner_introns$intron_coordinate_start < inner_introns$intron_coordinate_end)
+#inner_introns[intron_coordinate_start == intron_coordinate_end, ]
+colnames(inner_introns) <- c("seqid", "source", "feature", "start", "end", "score", "strand", "phase", "exon_id", "transcript_id", "exon_number", "exon_count", "intron_length")
+inner_introns$uniqid <- rownames(inner_introns)
+
+promoters <- data_exons[exon_number == 1, c("seqid", "source", "feature", "promoter_coordinate_start", "promoter_coordinate_end", "score", "strand", "phase", "exon_id", "transcript_id", "exon_number", "exon_count", "intron_length")]
+promoters <- unique(promoters)
+promoters$feature <- "promoter"
+summary(promoters$promoter_coordinate_start < promoters$promoter_coordinate_end)
+promoters <- promoters[promoter_coordinate_start > 0, ]
+colnames(promoters) <- c("seqid", "source", "feature", "start", "end", "score", "strand", "phase", "exon_id", "transcript_id", "exon_number", "exon_count", "intron_length")
+promoters$uniqid <- rownames(promoters)
+
+tails <- data_exons[exon_number == exon_count, c("seqid", "source", "feature", "tail_coordinate_start", "tail_coordinate_end", "score", "strand", "phase", "exon_id", "transcript_id", "exon_number", "exon_count", "intron_length")]
+tails <- unique(tails)
+tails$feature <- "tail"
+summary(tails$tail_coordinate_start < tails$tail_coordinate_end)
+tails <- tails[tail_coordinate_start > 0, ]
+colnames(tails) <- c("seqid", "source", "feature", "start", "end", "score", "strand", "phase", "exon_id", "transcript_id", "exon_number", "exon_count", "intron_length")
+tails$uniqid <- rownames(tails)
+  
+fwrite(promoters[, c(1:8, 14)], "./annotation_files_for_motif_counting/all_promoters_for_bedtools_count.gtf", sep = "\t", col.names = FALSE, scipen = 10)
+fwrite(inner_introns[, c(1:8, 14)], "./annotation_files_for_motif_counting/all_introns_for_bedtools_count.gtf", sep = "\t", col.names = FALSE, scipen = 10)
+fwrite(tails[, c(1:8, 14)], "./annotation_files_for_motif_counting/all_tails_for_bedtools_count.gtf", sep = "\t", col.names = FALSE, scipen = 10)
+```
+
+## Files for metaplots
+
+```{r}
+promoters$start_for_bed <- promoters$start - 1
+inner_introns$start_for_bed <- inner_introns$start - 1
+tails$start_for_bed <- tails$start - 1
+
+
+fwrite(promoters[transcript_id %in% only_longest_transcripts$transcript_id & strand == "+", c("seqid", "start_for_bed", "end", "uniqid", "score", "strand")], 
+       "./longest_transcripts_promoters_plus_strand_for_metaplots.bed", sep = "\t", col.names = FALSE, scipen = 10)
+fwrite(inner_introns[transcript_id %in% only_longest_transcripts$transcript_id & strand == "+", c("seqid", "start_for_bed", "end", "uniqid", "score", "strand")], 
+       "./longest_transcripts_introns_plus_strand_for_metaplots.bed", sep = "\t", col.names = FALSE, scipen = 10)
+fwrite(tails[transcript_id %in% only_longest_transcripts$transcript_id & strand == "+", c("seqid", "start_for_bed", "end", "uniqid", "score", "strand")], 
+       "./longest_transcripts_tails_plus_strand_for_metaplots.bed", sep = "\t", col.names = FALSE, scipen = 10)
+
+
+fwrite(promoters[transcript_id %in% only_longest_transcripts$transcript_id & strand == "-", c("seqid", "start_for_bed", "end", "uniqid", "score", "strand")], 
+       "./longest_transcripts_promoters_minus_strand_for_metaplots.bed", sep = "\t", col.names = FALSE, scipen = 10)
+fwrite(inner_introns[transcript_id %in% only_longest_transcripts$transcript_id & strand == "-", c("seqid", "start_for_bed", "end", "uniqid", "score", "strand")], 
+       "./longest_transcripts_introns_minus_strand_for_metaplots.bed", sep = "\t", col.names = FALSE, scipen = 10)
+fwrite(tails[transcript_id %in% only_longest_transcripts$transcript_id & strand == "-", c("seqid", "start_for_bed", "end", "uniqid", "score", "strand")], 
+       "./longest_transcripts_tails_minus_strand_for_metaplots.bed", sep = "\t", col.names = FALSE, scipen = 10)
+```
+
+## Regions upstream and downstream
+
+### Promoters
+```{r}
+homer_results_promoters_human <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/intron_data/all_promoters_for_bedtools_count_count_motif_human.bed")
+colnames(homer_results_promoters_human) <- c("seqname_promoter", "source", "feature_promoter", "start_promoter", "end_promoter", 
+                                   "score", "strand_promoter", "frame", "rownumber1_promoter","L1_motif_count_same_promoter", "rownumber2_promoter",
+                                   "L1_motif_count_opposite_promoter")
+
+summary(homer_results_promoters_human$rownumber1_promoter == homer_results_promoters_human$rownumber2_promoter)
+
+homer_results_promoters_human$rownumber2_promoter <- NULL
+
+names(homer_results_promoters_human)[names(homer_results_promoters_human) == 'rownumber1_promoter'] <- 'rownumber_promoter'
+
+
+AT_content_promoters_human <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/intron_data/all_promoters_for_bedtools_count_ATcontent.bed")
+colnames(AT_content_promoters_human) <- c("seqname_promoter", "source", "feature_promoter", "start_promoter", "end_promoter", 
+                          "score", "strand_promoter", "frame", "rownumber_promoter", "pct_at_promoter", "pct_gc_promoter", 
+                          "num_A_promoter", "num_C_promoter", "num_G_promoter", "num_T_promoter", "num_N_promoter", "num_oth_promoter", "seq_len_promoter")
+
+homer_results_promoters_human <- homer_results_promoters_human[homer_results_promoters_human$rownumber_promoter %in% AT_content_promoters_human$rownumber_promoter]
+homer_results_promoters_human <- merge.data.table(homer_results_promoters_human, AT_content_promoters_human, 
+                                                  by = c("seqname_promoter", "source", "feature_promoter", "start_promoter", 
+                                                         "end_promoter", "score", "strand_promoter", "frame", 'rownumber_promoter'))
+
+
+
+promoters <- promoters[promoters$uniqid %in% AT_content_promoters_human$rownumber_promoter]
+
+homer_results_promoters_human$rownumber_promoter <- as.character(homer_results_promoters_human$rownumber_promoter)
+promoters <- merge.data.table(promoters[, c("transcript_id", "uniqid", "start", "end")], homer_results_promoters_human, by.x = "uniqid", by.y = "rownumber_promoter")
+
+summary(promoters$start == promoters$start_promoter)
+summary(promoters$end == promoters$end_promoter)
+promoters$start <- NULL
+promoters$end <- NULL
+promoters$source <- NULL
+promoters$frame <- NULL
+
+only_longest_transcripts <- merge(only_longest_transcripts, promoters, by = "transcript_id")
+
+rm(homer_results_promoters_human)
+rm(AT_content_promoters_human)
+``` 
+
+### Tails
+
+```{r}
+homer_results_tails_human <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/intron_data/all_tails_for_bedtools_count_count_motif_human.bed")
+colnames(homer_results_tails_human) <- c("seqname_tail", "source", "feature_tail", "start_tail", "end_tail", 
+                                   "score", "strand_tail", "frame", "rownumber1_tail","L1_motif_count_same_tail", "rownumber2_tail",
+                                   "L1_motif_count_opposite_tail")
+
+summary(homer_results_tails_human$rownumber1_tails == homer_results_tails_human$rownumber2_tails)
+
+homer_results_tails_human$rownumber2_tail <- NULL
+
+names(homer_results_tails_human)[names(homer_results_tails_human) == 'rownumber1_tail'] <- 'rownumber_tail'
+
+
+AT_content_tails_human <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/intron_data/all_tails_for_bedtools_count_ATcontent.bed")
+colnames(AT_content_tails_human) <- c("seqname_tail", "source", "feature_tail", "start_tail", "end_tail", 
+                          "score", "strand_tail", "frame", "rownumber_tail", "pct_at_tail", "pct_gc_tail", 
+                          "num_A_tail", "num_C_tail", "num_G_tail", "num_T_tail", "num_N_tail", "num_oth_tail", "seq_len_tail")
+
+homer_results_tails_human <- homer_results_tails_human[homer_results_tails_human$rownumber_tail %in% AT_content_tails_human$rownumber_tail]
+homer_results_tails_human <- merge.data.table(homer_results_tails_human, AT_content_tails_human, 
+                                                  by = c("seqname_tail", "source", "feature_tail", "start_tail", 
+                                                         "end_tail", "score", "strand_tail", "frame", 'rownumber_tail'))
+
+
+
+tails <- tails[tails$uniqid %in% AT_content_tails_human$rownumber_tail]
+
+homer_results_tails_human$rownumber_tail <- as.character(homer_results_tails_human$rownumber_tail)
+tails <- merge.data.table(tails[, c("transcript_id", "uniqid", "start", "end")], homer_results_tails_human, by.x = "uniqid", by.y = "rownumber_tail")
+
+summary(tails$start == tails$start_tail)
+summary(tails$end == tails$end_tail)
+tails$start <- NULL
+tails$end <- NULL
+
+only_longest_transcripts <- merge(only_longest_transcripts, tails, by = "transcript_id")
+
+rm(AT_content_tails_human)
+rm(homer_results_tails_human)
+``` 
+
+### Nice plots
+
+```{r}
+#colnames(only_longest_transcripts)
+
+only_longest_transcripts$L1_motif_count_per_1kb_in_mRNA <- only_longest_transcripts$mRNA_L1_motif_count_total / only_longest_transcripts$mRNA_length * 1000
+only_longest_transcripts$L1_motif_count_per_1kb_in_introns <- (only_longest_transcripts$DNA_L1_motif_count_total - only_longest_transcripts$mRNA_L1_motif_count_total) /
+  (only_longest_transcripts$DNA_length - only_longest_transcripts$mRNA_length) * 1000
+only_longest_transcripts$L1_motif_count_per_1kb_in_promoter <- (only_longest_transcripts$L1_motif_count_same_promoter + only_longest_transcripts$L1_motif_count_opposite_promoter) /
+  only_longest_transcripts$seq_len_promoter * 1000
+only_longest_transcripts$L1_motif_count_per_1kb_in_tail <- (only_longest_transcripts$L1_motif_count_same_tail + only_longest_transcripts$L1_motif_count_opposite_tail) /
+  only_longest_transcripts$seq_len_tail * 1000
+
+
+summary(only_longest_transcripts[, c("gene_id", "norm_five_prime_utr_L1_motif_count","norm_three_prime_utr_L1_motif_count", 
+                                     "norm_CDS_L1_motif_count", "L1_motif_count_per_1kb_in_introns")])
+
+different_parts_of_genes <- only_longest_transcripts[, c("gene_id", "L1_motif_count_per_1kb_in_promoter", 
+                                                         "norm_five_prime_utr_L1_motif_count", 
+                                     "norm_CDS_L1_motif_count", "L1_motif_count_per_1kb_in_introns","norm_three_prime_utr_L1_motif_count",
+                                     "L1_motif_count_per_1kb_in_tail")]
+different_parts_of_genes <- melt.data.table(different_parts_of_genes, measure.vars = 2:7)
+
+summ <- different_parts_of_genes %>% 
+  group_by(variable) %>% 
+  summarize(min = min(value, na.rm=TRUE), max = max(value, na.rm=TRUE), 
+            mean = mean(value, na.rm=TRUE), q1= quantile(value, probs = 0.25, na.rm=TRUE), 
+            median = median(value, na.rm=TRUE), q3= quantile(value, probs = 0.75, na.rm=TRUE),
+            sd = sd(value, na.rm=TRUE)) %>%
+  mutate_if(is.numeric, round, digits=2)
+
+setDT(summ)
+summ[variable == "norm_five_prime_utr_L1_motif_count", variable := "5'UTR"]
+summ[variable == "norm_three_prime_utr_L1_motif_count", variable := "3'UTR"]
+summ[variable == "norm_CDS_L1_motif_count", variable := "CDS"]
+summ[variable == "L1_motif_count_per_1kb_in_introns", variable := "Introns"]
+summ[variable == "L1_motif_count_per_1kb_in_promoter", variable := "1 kb upstream"]
+summ[variable == "L1_motif_count_per_1kb_in_tail", variable := "1 kb downstream"]
+
+
+
+ggplot(different_parts_of_genes, aes(y=value, fill = variable, x = variable)) +
+  geom_boxplot() +
+  theme_bw() +
+  theme(legend.position = "None", axis.title.y = element_text(size=14),
+        axis.text.x=element_text(size=14, angle = 30, vjust = 0.5)) +
+  ylab("L1 motif count per 1kb") +
+  xlab("") +
+  ylim(0, 50) +
+  scale_x_discrete(labels = c("5'UTR", "3'UTR", "CDS", "Introns", "1 kb upstream", "1 kb downstream")) +
+  geom_table_npc(data = summ, label = list(summ), npcx = 0.00, npcy = 1, hjust = -0.55, vjust = 1.1, 
+                 table.theme = ttheme_gtlight)
+
+
+ggplot(different_parts_of_genes, aes(y=value, fill = variable, x = variable)) +
+  geom_boxplot() +
+  theme_bw() +
+  theme(legend.position = "None", axis.title.y = element_text(size=17, face = "bold"),
+        axis.text.x=element_text(size=17, angle = 0, face = "bold")) +
+  ylab("L1 motif count per 1kb") +
+  xlab("") +
+  ylim(0, 50) +
+  scale_x_discrete(labels = c("1 kb \nupstream", "5'UTR", "CDS", "Introns", "3'UTR", "1 kb \ndownstream"))
+
+#foo <- pairwise.wilcox.test(different_parts_of_genes$value, different_parts_of_genes$variable, p.adjust.method="bonferroni", paired = TRUE)
+#print(as.matrix(foo$p.value))
+
+#cor_test_res <- cor.test(different_parts_of_genes[, 2:7], use = "pairwise.complete.obs")
+#pheatmap(cor_test_res)
+```
+
+```{r}
+tmp <- only_longest_transcripts[, c("transcript_id", "norm_five_prime_utr_L1_motif_count","norm_three_prime_utr_L1_motif_count", 
+                                     "norm_CDS_L1_motif_count", "L1_motif_count_per_1kb_in_introns", "L1_motif_count_per_1kb_in_promoter",
+                                     "L1_motif_count_per_1kb_in_tail")]
+
+
+ggplot(tmp, aes(x=norm_CDS_L1_motif_count, y = norm_five_prime_utr_L1_motif_count))+
+  geom_point()
+
+ggplot(tmp, aes(x=L1_motif_count_per_1kb_in_promoter, y = L1_motif_count_per_1kb_in_tail))+
+  geom_point()
+```
+
+
+
+# Binning the AT content
+
+```{r}
+only_longest_transcripts <- only_longest_transcripts %>% mutate(AT_bin=round(only_longest_transcripts$pct_at*100))
+
+ggplot(only_longest_transcripts, aes(x=AT_bin, y = only_longest_transcripts$`pct_at`))+
+  geom_point() +
+  ylab("AT content") +
+  theme_bw()
+
+ggplot(only_longest_transcripts, aes(x=AT_bin, y = L1motif_count_per_1kb))+
+  geom_point() +
+  labs(y="L1 motif count per 1 kb", x="AT bin")+
+    stat_summary(geom = "point", fun.y = "mean", col = "black", size = 2, shape = 24, fill = "red")+
+  theme_bw()+
+   theme(axis.text.x = element_text(face="bold", size = 17),
+         axis.text.y = element_text(face="bold", size = 17), 
+         axis.title = element_text(face="bold", size = 17))
+
+```
+
+```{r}
+only_longest_transcripts[, mean(L1motif_count_per_1kb), by=AT_bin]
+only_longest_transcripts[, mean(only_longest_transcripts$`pct_at`), by=AT_bin]
+
+tmp <- only_longest_transcripts[, .N, by=AT_bin]
+bins_with_too_little_number_of_genes <- tmp[N < 10, AT_bin]
+#sum(tmp[N < 10, N]) - how many genes will be removed
+
+only_longest_transcripts[!AT_bin %in% bins_with_too_little_number_of_genes, ]
+
+only_longest_transcripts[, mean_L1_motif_density_per_bin := mean(L1motif_count_per_1kb), by = AT_bin]
+only_longest_transcripts[, sd_of_L1_motif_density_per_bin := sd(L1motif_count_per_1kb), by = AT_bin]
+
+only_longest_transcripts$Z_score <- (only_longest_transcripts$L1motif_count_per_1kb - only_longest_transcripts$mean_L1_motif_density_per_bin) / only_longest_transcripts$sd_of_L1_motif_density_per_bin
+
+only_longest_transcripts$p_value <- 2 * pnorm(abs(only_longest_transcripts$Z_score), lower.tail=FALSE)
+```
+
+```{r}
+only_longest_transcripts[, mean_L1_motif_density_per_bin_same_strand := mean(L1motif_count_per_1kb_same_strand), by = AT_bin]
+only_longest_transcripts[, sd_of_L1_motif_density_per_bin_same_strand := sd(L1motif_count_per_1kb_same_strand), by = AT_bin]
+
+only_longest_transcripts$Z_score_same_strand <- (only_longest_transcripts$L1motif_count_per_1kb_same_strand - only_longest_transcripts$mean_L1_motif_density_per_bin_same_strand) / only_longest_transcripts$sd_of_L1_motif_density_per_bin_same_strand
+
+only_longest_transcripts$p_value_same_strand <- 2 * pnorm(abs(only_longest_transcripts$Z_score_same_strand), lower.tail=FALSE)
+```
+
+```{r}
+only_longest_transcripts[, mean_L1_motif_density_per_bin_opposite_strand := mean(L1motif_count_per_1kb_opposite_strand), by = AT_bin]
+only_longest_transcripts[, sd_of_L1_motif_density_per_bin_opposite_strand := sd(L1motif_count_per_1kb_opposite_strand), by = AT_bin]
+
+only_longest_transcripts$Z_score_opposite_strand <- (only_longest_transcripts$L1motif_count_per_1kb_opposite_strand - only_longest_transcripts$mean_L1_motif_density_per_bin_opposite_strand) / only_longest_transcripts$sd_of_L1_motif_density_per_bin_opposite_strand
+
+only_longest_transcripts$p_value_opposite_strand <- 2 * pnorm(abs(only_longest_transcripts$Z_score_opposite_strand), lower.tail=FALSE)
+```
+
+## Z scores total
+
+```{r}
+nrow(only_longest_transcripts[p_value < 0.05 & gene_name %like% "^OR", ])
+
+only_longest_transcripts[p_value < 0.05 & Z_score > 0, label_for_plot := "L1 motif enriched"]
+only_longest_transcripts[p_value < 0.05 & Z_score < 0, label_for_plot := "L1 motif depleted"]
+only_longest_transcripts[p_value > 0.05 | is.na(p_value), label_for_plot := "Not significant"]
+
+ggplot(only_longest_transcripts, aes(y=Z_score, x=`pct_at`,
+                                     color = label_for_plot)) +
+  geom_point(alpha = 0.7)+
+  labs(x="AT content", y="Z score", color = "")+
+  theme_bw() +
+  scale_colour_manual(values = c("#56B4E9","#E69F00","#999999"))+
+  theme(axis.text.x = element_text(face="bold", size=17),
+        axis.text.y = element_text(face="bold", size=17), 
+        axis.title = element_text(face="bold", size=17),
+        legend.text = element_text(face="bold", size=17),
+        legend.position = c(0.25, 0.2))
+
+```
+
+```{r}  
+only_longest_transcripts[Z_score < 0 & p_value < 0.05, L1_motif_depleted_genes := TRUE]
+
+ggplot(only_longest_transcripts, aes(y=L1motif_count_per_1kb, x=`pct_at`, color = p_value < 0.05)) +
+  geom_point(alpha=0.7)+
+  labs(x="AT_content", y="L1 motif count per 1 kb", color="p-value < 0.05") +
+  theme_bw()
+
+ggplot(only_longest_transcripts, aes(y=log(DNA_length), x = p_value < 0.05)) +
+  geom_boxplot(alpha=0.7, width=0.4)+
+  theme_bw()+
+  facet_wrap(~L1_motif_depleted_genes)
+
+ggplot(only_longest_transcripts, aes(y=log(exon_count), x = p_value < 0.05)) +
+  geom_boxplot(alpha=0.7)+
+  theme_bw()+
+  facet_wrap(~L1_motif_depleted_genes)
+
+ggplot(only_longest_transcripts, aes(y=(DNA_length - mRNA_length) / DNA_length, x = p_value < 0.05)) +
+  geom_boxplot(alpha=0.7)+
+  theme_bw() +
+  labs(y = "Intron part")+
+  facet_wrap(~L1_motif_depleted_genes)
+
+ggplot(only_longest_transcripts, aes(x=Z_score)) +
+  geom_density()
+
+ggplot(only_longest_transcripts, aes(y=L1motif_count_per_1kb, x=DNA_length, color = p_value < 0.05)) +
+  geom_point(alpha=0.7)+
+  labs(x="Length", y="L1 motif count per 1 kb", color="p-value < 0.05") +
+  theme_bw()
+
+```
+
+```{r}
+ggplot(only_longest_transcripts[gene_name %like% "^OR", ], aes(y=log(DNA_length), x = p_value < 0.05, fill = p_value < 0.05)) +
+  geom_boxplot(alpha=0.7, width=0.4)+
+  theme_bw() +
+  theme(legend.position = "None")+
+  coord_fixed(ratio = 0.1)
+
+ggplot(only_longest_transcripts[gene_name %like% "^OR", ], aes(y=log(exon_count), fill = p_value < 0.05)) +
+  geom_boxplot(alpha=0.7)+
+  theme_bw()+
+  theme(legend.position = "None")+
+  coord_fixed(ratio = 0.2)
+
+ggplot(only_longest_transcripts[gene_name %like% "^OR", ], aes(y=(DNA_length - mRNA_length) / DNA_length, fill =p_value < 0.05)) +
+  geom_boxplot(alpha=0.7)+
+  theme_bw() +
+  coord_fixed(ratio = 1) +
+  labs(y = "Intron part")
+
+ggplot(only_longest_transcripts[gene_name %like% "^OR", ], aes(x=Z_score, fill=p_value < 0.05)) +
+  geom_density(alpha = 0.7)
+```
+
+## Z scores same_strand and opposite strands
+
+```{r}
+tmp <- only_longest_transcripts[, c("pct_at", "L1motif_count_per_1kb_same_strand","Z_score_same_strand", "L1motif_count_per_1kb_opposite_strand", "Z_score_same_strand")]
+
+
+ggplot(only_longest_transcripts, aes(y=Z_score_same_strand, x=`pct_at`,
+                                     color = p_value_same_strand < 0.05)) +
+  geom_point(alpha = 0.7)+
+  labs(x="AT_content", y="Z score same strand")+
+  theme_bw()
+
+ggplot(only_longest_transcripts, aes(y=Z_score_opposite_strand, x=`pct_at`,
+                                     color = p_value_opposite_strand < 0.05)) +
+  geom_point(alpha = 0.7)+
+  labs(x="AT_content", y="Z score opposite strand")+
+  theme_bw()
+
+```
+
+## L1 motif depleted and enriched genes
+
+```{r}
+#L1motif_depleted_genes <- as.vector(only_longest_transcripts[p_value < 0.05 & Z_score < 0, gene_name])
+#L1motif_enriched_genes <- as.vector(only_longest_transcripts[p_value < 0.05 & Z_score > 0, gene_name])
+
+#msigdbr_d <- msigdbr(species = "Homo sapiens")
+#msigdbr_t2g = msigdbr_d %>% dplyr::distinct(gs_name, gene_symbol) %>% as.data.frame()
+#enricher_results_L1motif_depleted_genes <- clusterProfiler::enricher(gene = L1motif_depleted_genes, TERM2GENE = msigdbr_t2g)
+#results_L1motif_depleted_genes <- as.data.frame(enricher_results_L1motif_depleted_genes@result)
+
+#enricher_results_L1motif_enriched_genes <- clusterProfiler::enricher(gene = L1motif_enriched_genes, TERM2GENE = msigdbr_t2g)
+#results_L1motif_enriched_genes <- as.data.frame(enricher_results_L1motif_enriched_genes@result)
+```
+
+
+
+# Gene groups
+
+## Genes with known L1 polymorphisms
+
+Genes with polymorphic L1 have higher L1_motif_count_per_1kb, but Z score is decreased, KS test
+
+```{r}
+L1_polymorphic_genes <- fread("./gene_sets/SRIP.txt")
+L1_polymorphic_genes_germline <- unique(L1_polymorphic_genes[gene != "." & lineage == "germline", gene])
+L1_polymorphic_genes_somatic <- unique(L1_polymorphic_genes[gene != "." & lineage == "somatic", gene])
+
+L1_polymorphic_genes_both <- intersect(L1_polymorphic_genes_germline, L1_polymorphic_genes_somatic)
+
+L1_polymorphic_genes$lineage <- as.factor(L1_polymorphic_genes$lineage)
+
+L1_polymorphic_genes[, uniqueN(mrip), by = c("gene","lineage")]
+
+casted_L1_polymorphic_genes <- L1_polymorphic_genes[, uniqueN(mrip), by = c("gene","lineage")]
+casted_L1_polymorphic_genes[is.na(V1), V1 := 0 ]
+casted_L1_polymorphic_genes <- casted_L1_polymorphic_genes[gene != ".", ]
+casted_L1_polymorphic_genes <- merge(casted_L1_polymorphic_genes, only_longest_transcripts[, c("gene_name", "L1motif_count_per_1kb", "Z_score", "seq_len")], by.x = "gene", by.y = "gene_name")
+casted_L1_polymorphic_genes$mrip_per_1kb <- casted_L1_polymorphic_genes$V1/casted_L1_polymorphic_genes$seq_len * 1000
+
+```
+
+
+## SHOW to GAEL
+
+
+```{r}
+
+ggplot(casted_L1_polymorphic_genes, aes(x = L1motif_count_per_1kb, y = V1, color = lineage)) +
+  geom_point() +
+  facet_wrap(~lineage)+
+  labs(y="Number of mrip in gene")
+
+ggplot(casted_L1_polymorphic_genes, aes(x = Z_score, y = V1, color = lineage)) +
+  geom_point()+
+  facet_wrap(~lineage) +
+  labs(y="Number of mrip in gene")
+
+ggplot(casted_L1_polymorphic_genes, aes(x = seq_len, y = V1, color = lineage)) +
+  geom_point()+
+  facet_wrap(~lineage) +
+  labs(y="Number of mrip in gene")
+
+ggplot(casted_L1_polymorphic_genes, aes(x = L1motif_count_per_1kb, y = V1/seq_len * 1000, color = lineage)) +
+  geom_point()+
+  facet_wrap(~lineage) +
+  labs(y="Number of mrip per 1 kb")
+```
+
+```{r}
+#only_longest_transcripts$L1_polymorphic <- NULL
+only_longest_transcripts$L1_polymorphic <- "not_reported"
+
+only_longest_transcripts[gene_name %in% L1_polymorphic_genes_germline, L1_polymorphic := "germline"]
+only_longest_transcripts[gene_name %in% L1_polymorphic_genes_somatic, L1_polymorphic := "somatic"]
+only_longest_transcripts[gene_name %in% L1_polymorphic_genes_both, L1_polymorphic := "both"]
+
+ggplot(only_longest_transcripts, aes(x=Z_score, fill = L1_polymorphic))+
+  geom_density(alpha=0.7) +
+  theme_bw()
+
+ggplot(only_longest_transcripts, aes(x=L1motif_count_per_1kb, fill = L1_polymorphic))+
+  geom_density(alpha=0.7) +
+  theme_bw() +
+  theme(legend.position = "none")
+
+independence_test(only_longest_transcripts$Z_score~only_longest_transcripts$L1_polymorphic)
+independence_test(only_longest_transcripts$L1motif_count_per_1kb~only_longest_transcripts$L1_polymorphic)
+
+t.test(only_longest_transcripts$Z_score~only_longest_transcripts$L1_polymorphic)
+t.test(only_longest_transcripts$L1motif_count_per_1kb~only_longest_transcripts$L1_polymorphic)
+
+
+ks.test(only_longest_transcripts[L1_polymorphic == TRUE, ]$Z_score, 
+         only_longest_transcripts[L1_polymorphic == FALSE, ]$Z_score)
+ks.test(only_longest_transcripts[L1_polymorphic == TRUE, ]$L1motif_count_per_1kb, 
+         only_longest_transcripts[L1_polymorphic == FALSE, ]$L1motif_count_per_1kb)
+
+colnames(only_longest_transcripts)
+```
+
+```{r}
+ggplot(only_longest_transcripts, aes(x=L1motif_count_per_1kb, fill = L1_polymorphic))+
+  geom_density(alpha=0.7) +
+  facet_wrap(~strand)
+
+ggplot(only_longest_transcripts, aes(x=L1motif_count_per_1kb_same_strand, fill = L1_polymorphic))+
+  geom_density(alpha=0.7) +
+  facet_wrap(~strand)
+
+ggplot(only_longest_transcripts, aes(x=L1motif_count_per_1kb_opposite_strand, fill = L1_polymorphic))+
+  geom_density(alpha=0.7) +
+  facet_wrap(~strand)
+
+only_MANE_transcripts$L1_polymorphic <- FALSE
+
+only_MANE_transcripts[gene_name %in% L1_polymorphic_genes_names, L1_polymorphic := TRUE]
+
+ggplot(only_MANE_transcripts, aes(x=Z_score, fill = L1_polymorphic))+
+  geom_density(alpha=0.7)
+
+ggplot(only_MANE_transcripts, aes(x=Z_score_same_strand, fill = L1_polymorphic))+
+  geom_density(alpha=0.7)
+
+ggplot(only_MANE_transcripts, aes(x=Z_score_opposite_strand, fill = L1_polymorphic))+
+  geom_density(alpha=0.7)
+
+ggplot(only_MANE_transcripts, aes(x=L1motif_count_per_1kb, fill = L1_polymorphic))+
+  geom_density(alpha=0.7) +
+  facet_wrap(~strand)
+
+ggplot(only_MANE_transcripts, aes(x=L1motif_count_per_1kb_same_strand, fill = L1_polymorphic))+
+  geom_density(alpha=0.7) +
+  facet_wrap(~strand)
+
+ggplot(only_MANE_transcripts, aes(x=L1motif_count_per_1kb_opposite_strand, fill = L1_polymorphic))+
+  geom_density(alpha=0.7) +
+  facet_wrap(~strand)
+
+ggplot(only_MANE_transcripts, aes(x=pct_at, fill = L1_polymorphic))+
+  geom_density(alpha=0.7) +
+  facet_wrap(~L1_polymorphic)
+
+ggplot(only_MANE_transcripts, aes(x=pct_at, y=L1motif_count_per_1kb, colour = L1_polymorphic))+
+  geom_point(alpha=0.7) +
+  facet_wrap(~L1_polymorphic)
+
+ggplot(only_MANE_transcripts, aes(x=pct_at, y=Z_score, colour = L1_polymorphic))+
+  geom_point(alpha=0.7) +
+  facet_wrap(~L1_polymorphic)
+
+ggplot(only_MANE_transcripts, aes(x=pct_at, y=Z_score_same_strand, colour = L1_polymorphic))+
+  geom_point(alpha=0.7) +
+  facet_wrap(~L1_polymorphic)
+
+ggplot(only_MANE_transcripts, aes(x=pct_at, y=Z_score_opposite_strand, colour = L1_polymorphic))+
+  geom_point(alpha=0.7) +
+  facet_wrap(~L1_polymorphic)
+```
+
+## Genes with pathogenic TE insertions 
+main list -
+<https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4859970/pdf/13100_2016_Article_65.pdf>
+<https://pubmed.ncbi.nlm.nih.gov/34639227/> GAA
+<https://pubmed.ncbi.nlm.nih.gov/34828342/> BRCA1
+<https://pubmed.ncbi.nlm.nih.gov/35395816/> TAF1
+<https://pubmed.ncbi.nlm.nih.gov/34405929/> NDUFV2
+<https://pubmed.ncbi.nlm.nih.gov/34183725/> RP2
+<https://pubmed.ncbi.nlm.nih.gov/34231212/> SMARCB1
+
+
+```{r}
+pathogenic_insertions <- fread("./gene_sets/genes_TEinsertion_pathogenic.txt", header=FALSE)
+additional_pathogenic_insertions <- c("GAA", "BRCA1", "TAF1", "NDUFV2", "RP2", "SMARCB1")
+somatic_L1_insertions_brain_pathogenic <- c("SCN1A", "SCN2A", "CTNNA3", "GPHN", "IL1RAPL1", "DLG2", "FAM126A", "OPHN1", "CTNNA3", "CNTAP2", "RELN")
+
+only_longest_transcripts$TE_pathogenic <- FALSE
+
+only_longest_transcripts[gene_name %in% pathogenic_insertions$V1, TE_pathogenic := TRUE]
+
+ggplot(only_longest_transcripts, aes(y=Z_score, x=TE_pathogenic, fill = TE_pathogenic))+
+  geom_boxplot(alpha=0.7)
+
+ggplot(only_longest_transcripts, aes(x=Z_score, fill = TE_pathogenic))+
+  geom_density(alpha=0.7)
+
+
+ggplot(only_longest_transcripts, aes(x=pct_at, color = TE_pathogenic))+
+  geom_density(alpha=0.7)
+
+ggplot(only_longest_transcripts, aes(x=pct_at, color = L1_polymorphic))+
+  geom_density(alpha=0.7)
+
+ggplot(only_longest_transcripts, aes(x=L1motif_count_per_1kb, fill = TE_pathogenic))+
+  geom_density(alpha=0.7)
+
+intersect(pathogenic_insertions$V1, L1_polymorphic_genes_names)
+
+safe_polymorphic <- L1_polymorphic_genes_names[(!L1_polymorphic_genes_names %in% pathogenic_insertions$V1)]
+
+ggplot(only_longest_transcripts[gene_name %in% pathogenic_insertions$V1 | 
+                                  gene_name %in% additional_pathogenic_insertions | 
+                                  gene_name %in% somatic_L1_insertions_brain_pathogenic, ], aes(x=Z_score, color = gene_name %in% safe_polymorphic))+
+  geom_density(alpha=0.7)
+
+ggplot(only_longest_transcripts[gene_name %in% safe_polymorphic, ], aes(x=Z_score, color = gene_name %in% pathogenic_insertions$V1 | 
+                                  gene_name %in% additional_pathogenic_insertions | 
+                                  gene_name %in% somatic_L1_insertions_brain_pathogenic))+
+  geom_density(alpha=0.7) +
+  theme(legend.position = "None")
+```
+
+## Essential genes
+
+the list if essential genes were downloaded from
+<https://academic.oup.com/nar/article/49/D1/D677/5937083>
+
+```{r}
+essential_genes <- fread("./gene_sets//deg_annotation_e.csv", header = FALSE)
+list_of_essential_genes <- essential_genes[V8 == "Homo sapiens", V3]
+list_of_essential_genes <- unique(list_of_essential_genes)
+```
+
+```{r}
+#t(only_longest_transcripts[gene_name == "SCN1A", ])
+
+only_longest_transcripts[gene_name %in% list_of_essential_genes, essential := TRUE]
+only_longest_transcripts[gene_name %like% "^HOX", HOX := "HOX genes"]
+only_longest_transcripts[gene_name %like% "^OR", Olfactory_receptors := "Olfactory_receptors"]
+
+ggplot(only_longest_transcripts, aes(x = L1motif_count_per_1kb, fill = essential)) +
+  geom_density(alpha = 0.5)
+
+ggplot(only_longest_transcripts, aes(x = L1motif_count_per_1kb, fill = HOX)) +
+  geom_density(alpha = 0.5)
+
+ggplot(only_longest_transcripts, aes(x = L1motif_count_per_1kb, fill = Olfactory_receptors)) +
+  geom_density(alpha = 0.5)
+
+ggplot(only_longest_transcripts, aes(x = `pct_at`, fill = Olfactory_receptors)) +
+  geom_density(alpha = 0.5)
+
+ggplot(only_longest_transcripts, aes(x = Z_score, fill = essential)) +
+  geom_density(alpha = 0.5)
+
+ggplot(only_longest_transcripts, aes(x = Z_score, fill = HOX)) +
+  geom_density(alpha = 0.5)
+
+ggplot(only_longest_transcripts, aes(x = Z_score, fill = Olfactory_receptors)) +
+  geom_density(alpha = 0.5)
+```
+
+## Housekeeping genes 2013
+
+The list were taken from
+[https://www.cell.com/trends/genetics/fulltext/S0168-9525(13)00089-9](https://www.cell.com/trends/genetics/fulltext/S0168-9525(13)00089-9){.uri}
+
+```{r}
+housekeeping_genes <- fread("./gene_sets//housekeeping_genes.list", header = FALSE)
+
+only_longest_transcripts$housekeeping <- FALSE
+only_longest_transcripts[only_longest_transcripts$gene_name %in% housekeeping_genes$V1, housekeeping_2013 := TRUE]
+
+ggplot(only_longest_transcripts, aes(x = L1motif_count_per_1kb, fill = housekeeping_2013)) +
+  geom_density(alpha = 0.5)
+
+ggplot(only_longest_transcripts, aes(x = only_longest_transcripts$`pct_at`, y = L1motif_count_per_1kb, colour = housekeeping_2013)) +
+  geom_point(alpha = 0.5)
+
+ggplot(only_longest_transcripts[number_of_protein_coding_transcripts < 30, ], aes(x = number_of_protein_coding_transcripts, fill = housekeeping_2013)) +
+  geom_density(alpha = 0.5)
+```
+
+## Housekeeping genes 2003
+
+Human housekeeping genes, for example, contain a relatively high GC
+content and were found to include short introns
+
+The list were taken from
+<https://www.tau.ac.il/~elieis/Housekeeping_genes.html>
+
+```{r}
+housekeeping_genes_2003 <- fread("./gene_sets//housekeeping_genes_v2003.list", header = FALSE)
+
+ensemble_to_refseq_id <- fread("./gene_sets/biomart_ensemble_id_to_refseq.tsv")
+colnames(ensemble_to_refseq_id) <- c("gene_id", "refseq_id", "transcript_id")
+
+tmp <- ensemble_to_refseq_id[refseq_id %in% housekeeping_genes_2003$V1]
+only_longest_transcripts[only_longest_transcripts$gene_id %in% tmp$gene_id, housekeeping_2003 := TRUE]
+
+ggplot(only_longest_transcripts, aes(x = L1motif_count_per_1kb, fill = housekeeping_2003)) +
+  geom_density(alpha = 0.5)
+
+ggplot(only_longest_transcripts, aes(x = Z_score, fill = housekeeping_2003)) +
+  geom_density(alpha = 0.5)
+
+ggplot(only_longest_transcripts, aes(x = `pct_at`, fill = housekeeping_2003)) +
+  geom_density(alpha = 0.5)
+
+ggplot(only_longest_transcripts, aes(y = L1motif_count_per_1kb, x =`pct_at`, color = housekeeping_2003)) +
+  geom_point(alpha = 0.5)
+```
+
+## Haploinsufficiency-essential genes
+
+```{r}
+Haploinsufficiency_essential_genes_2022 <- read_xlsx("./gene_sets//1-s2.0-S2211124722003175-mmc2.xlsx", sheet=1)
+only_longest_transcripts[gene_id %in% Haploinsufficiency_essential_genes_2022$`Ensembl ID`, Haploinsufficiency_essential_genes_2022 := TRUE]
+
+ggplot(only_longest_transcripts, aes(y = L1motif_count_per_1kb, x =`pct_at`, color = Haploinsufficiency_essential_genes_2022)) +
+  geom_point(alpha = 0.5)+
+  facet_wrap(~Haploinsufficiency_essential_genes_2022)
+
+ggplot(only_longest_transcripts, aes(x = L1motif_count_per_1kb, fill = Haploinsufficiency_essential_genes_2022)) +
+  geom_density(alpha = 0.5)
+
+ggplot(only_longest_transcripts, aes(x = Z_score, fill = Haploinsufficiency_essential_genes_2022)) +
+  geom_density(alpha = 0.5)
+
+ggplot(only_longest_transcripts, aes(x = Z_score_opposite_strand, fill = Haploinsufficiency_essential_genes_2022)) +
+  geom_density(alpha = 0.5)
+ggplot(only_longest_transcripts, aes(x = Z_score_same_strand, fill = Haploinsufficiency_essential_genes_2022)) +
+  geom_density(alpha = 0.5)
+```
+
+## X-linked genes
+
+```{r}
+only_longest_transcripts$facet <- NULL
+only_longest_transcripts$facet <- factor(only_longest_transcripts$seqid, levels = c("1", "2", "3", "4",
+                                                                                           "5", "6", "7", "8", "9",
+                                                                                           "10", "11", "12", "13", "14",
+                                                                                           "15", "16", "17", "18", "19",
+                                                                                           "20", "21", "22", "X", "Y", "GL000009.2",
+                                                                                    "GL000194.1", "GL000195.1", "GL000213.1", "GL000218.1", "GL000219.1", "KI270711.1",
+                                                                                    "KI270713.1", "KI270721.1", "KI270726.1", "KI270727.1", "KI270728.1", "KI270731.1","KI270734.1"))
+
+
+ordinary_chr <- c(1:22, 'X', 'Y')
+
+ggplot(only_longest_transcripts[seqid %in% ordinary_chr, ], aes(y = L1motif_count_per_1kb, x=facet, fill = facet)) +
+  geom_boxplot(alpha = 0.5) +
+  theme_bw() +
+  theme(axis.title=element_text(size=14), 
+        legend.position = "None") +
+  xlab("Chromosome") +
+  ylab("L1 motif count per 1kb")
+
+ggplot(only_longest_transcripts[seqid %in% ordinary_chr, ], aes(y = Z_score, x=facet, fill = facet)) +
+  geom_boxplot(alpha = 0.5) +
+  theme_bw() +
+  theme(axis.title=element_text(size=14), 
+        legend.position = "None") +
+  xlab("Chromosome") +
+  ylab("Z score of L1 motif density")
+
+
+ggplot(only_longest_transcripts, aes(x=L1motif_count_per_1kb, fill = seqid == "X"))+
+  geom_density(alpha = 0.8) +
+  theme_bw() +
+  theme(legend.position = c(0.8, 0.5)) +
+  labs(fill = "Chromosome", x = "L1 motif count per 1kb")+
+  scale_fill_hue(labels = c("Other", "X"))
+
+ggplot(only_longest_transcripts, aes(x=Z_score, fill = seqid == "X"))+
+  geom_density(alpha = 0.8) +
+  theme_bw() +
+  theme(legend.position = c(0.8, 0.5)) +
+  labs(fill = "Chromosome", x = "Z score")+
+  scale_fill_hue(labels = c("Other", "X"))
+```
+
+```{r}
+ggplot(only_longest_transcripts, aes(x = Z_score, fill = essential)) +
+  geom_density(alpha = 0.5)
+
+ggplot(only_longest_transcripts, aes(x = Z_score, fill = HOX)) +
+  geom_density(alpha = 0.5)
+
+ggplot(only_longest_transcripts, aes(x = Z_score, fill = Olfactory_receptors)) +
+  geom_density(alpha = 0.5)
+
+ggplot(only_longest_transcripts, aes(y = Z_score, x=`pct_at`, color = Olfactory_receptors)) +
+  geom_point(alpha = 0.5) +
+  facet_wrap(~Olfactory_receptors)
+
+ggplot(only_longest_transcripts, aes(y = Z_score, x=`pct_at`, color = HOX)) +
+  geom_point(alpha = 0.5) +
+  facet_wrap(~HOX)
+
+ggplot(only_longest_transcripts, aes(y = Z_score, x=`pct_at`, color = essential)) +
+  geom_point(alpha = 0.5) +
+  facet_wrap(~essential)
+
+ggplot(only_longest_transcripts, aes(y = Z_score, x=`pct_at`, color = Haploinsufficiency_essential_genes_2022)) +
+  geom_point(alpha = 0.5) +
+  facet_wrap(~Haploinsufficiency_essential_genes_2022)
+```
+
+## Mutational constrain
+
+### Loss of function
+
+```{r}
+mutational_constrain <- fread("./gene_sets//plof_metrics_by_gene.tsv")
+
+colnames(mutational_constrain)
+#only_longest_transcripts$oe_lof_upper <- NULL
+only_longest_transcripts <- merge(only_longest_transcripts, mutational_constrain, by.x = "gene_name", by.y = "gene")
+#only_longest_transcripts$oe_lof_upper <- as.numeric(only_longest_transcripts$oe_lof_upper)
+
+ggplot(only_longest_transcripts, aes(x=oe_lof_upper, fill = housekeeping_2013)) +
+  geom_density(alpha = 0.6)
+
+ggplot(only_longest_transcripts, aes(x=oe_lof_upper, fill = housekeeping_2003)) +
+  geom_density(alpha = 0.6)
+
+ggplot(only_longest_transcripts, aes(x=oe_lof_upper, fill = Haploinsufficiency_essential_genes_2022)) +
+  geom_density(alpha = 0.6)
+
+ggplot(only_longest_transcripts, aes(x=oe_lof_upper, fill = essential)) +
+  geom_density(alpha = 0.6)
+
+ggplot(only_longest_transcripts, aes(x=oe_lof_upper, fill = HOX)) +
+  geom_density(alpha = 0.6)
+
+ggplot(only_longest_transcripts, aes(x=oe_lof_upper, fill = Olfactory_receptors)) +
+  geom_density(alpha = 0.6)
+```
+
+```{r}
+ggplot(only_longest_transcripts, aes(x=L1motif_count_per_1kb, fill = as.factor(oe_lof_upper_bin))) +
+  geom_density()+
+  facet_wrap(~ as.factor(oe_lof_upper_bin))
+
+ggplot(only_longest_transcripts, aes(y=Z_score, fill = as.factor(oe_lof_upper_bin))) +
+  geom_boxplot(alpha=0.8)
+
+ggplot(only_longest_transcripts, aes(y=Z_score, fill = as.factor(oe_lof_upper_bin), x=as.factor(oe_lof_upper_bin))) +
+  geom_boxplot(alpha=0.8) +
+  labs(x="High  <--- sensitivity for loss of function mutations ---> Low ", y = "Z score")+
+  theme_bw()+
+  theme(axis.text.x = element_text(face="bold", size=16),
+         axis.text.y = element_text(face="bold", size=17), 
+         axis.title = element_text(face="bold", size=17),
+         legend.text = element_text(face="bold", size=17),
+        legend.position = "None")
+
+
+ggplot(only_longest_transcripts, aes(y=pct_at, fill = as.factor(oe_lof_upper_bin), x=as.factor(oe_lof_upper_bin))) +
+  geom_boxplot(alpha=0.8) +
+  labs(x="High sensitivity <------ for loss of function mutations -----> Low sensitivity", y = "AT content")+
+  theme_bw()+
+  theme(legend.position = "None")  
+  
+
+ggplot(only_longest_transcripts, aes(y=L1motif_count_per_1kb, x = as.factor(oe_lof_upper_bin), fill = as.factor(oe_lof_upper_bin))) +
+  geom_violin()
+
+ggplot(only_longest_transcripts[!is.na(oe_lof_upper_bin), ], aes(x = as.factor(oe_lof_upper_bin), fill = L1_polymorphic))+
+  geom_bar(alpha = 0.8)+
+  labs(x="High sensitivity <------ for loss of fnction mutations -----> Low sensitivity", y = "Number of genes") +
+  theme_bw()
+```
+
+## Hart 2017 essential and non-essential genes
+
+-   list_CEGv2.tsv: list of 684 genes deemed essential in multiple
+    cultured cell lines based on CRISPR/Cas screen data Hart 2017
+-   list_NEGv1.tsv: list of 927 genes deemed non-essential in multiple
+    cultured cell lines based on CRISPR/Cas screen data Hart 2017
+
+```{r}
+CEG_gene_list <- fread("./gene_sets//list_CEGv2.tsv", header = FALSE)
+NEG_gene_list <- fread("./gene_sets/list_NEGv1.tsv", header = FALSE)
+
+only_longest_transcripts[gene_name %in% CEG_gene_list$V1, essential_Hart_2017 := TRUE]
+only_longest_transcripts[gene_name %in% NEG_gene_list$V1, essential_Hart_2017 := FALSE]
+
+levels(as.factor(only_longest_transcripts$essential_Hart_2017))
+
+ggplot(only_longest_transcripts, aes(x=oe_lof_upper_bin, fill = essential_Hart_2017)) +
+  geom_density(alpha = 0.6) +
+  theme_bw()+
+  labs(x="High sensitivity <------ for loss of function mutations -----> Low sensitivity", y = "Gene density")
+
+ggplot(only_longest_transcripts, aes(x=Z_score, color = essential_Hart_2017)) +
+  geom_density(size = 1.5)+
+  theme_bw() +
+  labs(x="Z score", color="") +
+  theme(axis.text.x = element_text(face="bold", size=17),
+        axis.text.y = element_text(face="bold", size=17), 
+        axis.title = element_text(face="bold", size=17),
+        legend.text = element_text(face="bold", size=17),
+        legend.position = c(0.79, 0.85))+
+  scale_color_manual(values=c("blue", "red", "#BD56641"), labels = c("Non-essential genes", "Essential genes", "Not determined"))
+
+ggplot(only_longest_transcripts, aes(x=L1motif_count_per_1kb, fill = essential_Hart_2017)) +
+  geom_density(alpha=0.6)+
+  theme_bw()+
+  labs(x="L1 motif count per 1 kb") 
+
+ggplot(only_longest_transcripts, aes(x=pct_at, fill = essential_Hart_2017)) +
+  geom_density(alpha=0.6)
+
+ggplot(only_longest_transcripts[DNA_length < 250000, ], aes(x=DNA_length, fill = essential_Hart_2017)) +
+  geom_density(alpha=0.6)
+
+ggplot(only_longest_transcripts[!is.na(essential_Hart_2017), ], aes(x = essential_Hart_2017, fill = L1_polymorphic))+
+  geom_bar()
+```
+
+```{r}
+only_MANE_transcripts[gene_name %in% CEG_gene_list$V1, essential_Hart_2017 := TRUE]
+only_MANE_transcripts[gene_name %in% NEG_gene_list$V1, essential_Hart_2017 := FALSE]
+
+levels(as.factor(only_MANE_transcripts$essential_Hart_2017))
+only_MANE_transcripts <- merge(only_MANE_transcripts, mutational_constrain, by.x = "gene_name", by.y = "gene")
+
+ggplot(only_MANE_transcripts, aes(x=oe_lof_upper_bin, fill = essential_Hart_2017)) +
+  geom_density(alpha = 0.6) +
+  theme_bw()+
+  labs(x="High sensitivity <------ for loss of function mutations -----> Low sensitivity", y = "Gene density")
+
+ggplot(only_MANE_transcripts, aes(x=Z_score, fill = essential_Hart_2017)) +
+  geom_density(alpha = 0.6)+
+  theme_bw() +
+  labs(x="Z score") +
+  theme(legend.position = "None")
+
+ggplot(only_MANE_transcripts, aes(x=L1motif_count_per_1kb, fill = essential_Hart_2017)) +
+  geom_density(alpha=0.6)+
+  theme_bw()+
+  labs(x="L1 motif count per 1 kb")
+
+ggplot(only_MANE_transcripts, aes(x=pct_at, fill = essential_Hart_2017)) +
+  geom_density(alpha=0.6)
+
+ggplot(only_MANE_transcripts[DNA_length < 250000, ], aes(x=DNA_length, fill = essential_Hart_2017)) +
+  geom_density(alpha=0.6)
+```
+
+```{r}
+ggplot(only_longest_transcripts, aes(y=L1motif_count_per_1kb, x=`pct_at`))+
+  facet_wrap(~essential_Hart_2017)+
+  geom_point()
+```
+
+### Missense mutations
+
+```{r}
+ggplot(only_longest_transcripts[!is.na(essential_Hart_2017)], aes(y=L1motif_count_per_1kb, x=oe_mis, color = essential_Hart_2017)) +
+  geom_point(alpha = 0.6)
+
+ggplot(only_longest_transcripts, aes(x = oe_mis, fill = essential_Hart_2017)) +
+  geom_density(alpha = 0.6)
+
+ggplot(only_longest_transcripts[oe_syn<2.5, ], aes(x=oe_syn, y=Z_score)) +
+  geom_point(alpha = 0.4)
+```
+
+```{r}
+intersect(L1_polymorphic_genes_names, only_longest_transcripts[essential_Hart_2017==TRUE, gene_name])
+intersect(L1_polymorphic_genes_names, only_longest_transcripts[essential_Hart_2017==FALSE, gene_name])
+```
+
+## Olfactory receprots genes
+
+```{r}
+nrow(only_longest_transcripts[gene_name %like% "^OR", ])
+
+all_OR <- only_longest_transcripts[gene_name %like% "^OR", gene_name]
+class1_OR <- only_longest_transcripts[gene_name %like% "^OR(51|52|53|54|55|56)", gene_name]
+class2_OR <- all_OR[!all_OR %in% class1_OR]
+
+ggplot(only_longest_transcripts[gene_name %like% "^OR", ], aes(x=pct_at, fill = gene_name %in% class1_OR)) +
+  geom_density(alpha=0.7)
+
+#summary(only_longest_transcripts[gene_name %like% "^OR", ])
+
+L1motif_depleted_genes[L1motif_depleted_genes %like% "^OR"]
+
+```
+
+## Tissue expression
+
+### Mean expression
+
+```{r}
+tissue_expression <- fread("./gene_sets/E-MTAB-5214-query-results.tpms.tsv")
+#only_longest_transcripts <- merge(only_longest_transcripts, tissue_expression, by.x = "gene_name", by.y = "Gene Name", all.x = TRUE)
+rm(tmp)
+tmp <- only_longest_transcripts[, c("gene_id.x", "Z_score")]
+tmp <- merge(tmp, tissue_expression, by.x = "gene_id.x", by.y = "Gene ID")
+tmp <- melt.data.table(tmp, id=1:3)
+
+ggplot(tmp[variable == "cerebral cortex" | variable == "blood" | variable == "testis", ], aes(y = Z_score, x=log(value + 1), color = variable)) +
+  geom_point(alpha = 0.2) +
+    theme(axis.text = element_blank(), 
+        axis.title=element_text(size=14,face="bold"), 
+        legend.position = "None",
+        strip.text.x = element_text(size = 14, face="bold"))
+
+```
+
+```{r}
+tmp <- na.omit(tmp)
+
+tmp2 <- tmp[, lapply(.SD, median), by=c("gene_id.x"), .SDcols = c("value", "Z_score")]
+
+ggplot(tmp2, aes(y=Z_score, x = log(value+1))) +
+  geom_point(alpha=0.6)
+```
+
+### Number of tissue
+
+```{r}
+tmp3 <- tmp[, .N, by = "gene_id.x"]
+tmp3 <- merge(tmp3, tmp2)
+
+ggplot(tmp3, aes(y=Z_score, x = as.factor(N))) +
+  geom_boxplot(alpha = 0.7)
+```
+
+# Cytoband regions
+
+```{r}
+levels(only_longest_transcripts$seqname)
+
+cytoband_file <- fread("../genomes/cytoBand.txt")
+
+colnames(cytoband_file) <- c("seqname", "start", "end", "region", "stain")
+cytoband_file$seqname <- gsub("chr", "", cytoband_file$seqname)
+
+cytoband_file <- cytoband_file[seqname %in% ordinary_chr, ]
+only_longest_transcripts <- only_longest_transcripts[seqname %in% ordinary_chr, ]
+colnames(only_longest_transcripts[, 1:9])
+
+fwrite(only_longest_transcripts[, 1:9], "for_Nick_transcripts.csv", sep = "\t", col.names = FALSE)
+fwrite(cytoband_file, "for_Nick_cytoband.csv", sep = "\t", col.names = FALSE)
+```
+
+```{bash eval=FALSE}
+bedtools intersect -wb -wa -a for_Nick_cytoband.csv -b for_Nick_transcripts.csv > intersect_cytobands_transcripts.tsv
+```
+
+```{r}
+intersection_cytobands_transcripts <- fread("./gene_sets/intersect_cytobands_transcripts.tsv")
+
+colnames(intersection_cytobands_transcripts) <- c("seqname_cytoband", "cytoband_start", "cytoband_end", "region", "stain", "seqname", "source", "feature", "start", "end", "score", "strand", "frame", "rownumber")
+
+only_longest_transcripts <- merge(only_longest_transcripts, intersection_cytobands_transcripts)
+```
+
+```{r}
+only_longest_transcripts$facet_stain <- factor(only_longest_transcripts$stain, levels = c("stalk", "acen", 
+                                                                                          "gvar", "gneg", "gpos25",
+                                                                                          "gpos50", "gpos75", "gpos100"))
+
+ggplot(only_longest_transcripts, aes(y=L1motif_count_per_1kb, x=facet_stain, fill = facet_stain)) +
+  geom_boxplot(alpha = 0.5) +
+  theme_bw() +
+  ylab("L1 motif density") +
+  xlab("Stain") +
+    theme(axis.title=element_text(size=14,face="bold"), 
+        legend.position = "None",
+        strip.text.x = element_text(size = 14, face="bold"))
+
+ggplot(only_longest_transcripts, aes(y=`pct_at`, x=facet_stain, fill = facet_stain)) +
+  geom_boxplot(alpha = 0.5) +
+  theme_bw() +
+  ylab("AT content") +
+  xlab("Stain") +
+    theme(axis.title=element_text(size=14,face="bold"), 
+        legend.position = "None",
+        strip.text.x = element_text(size = 14, face="bold"))
+
+
+ggplot(only_longest_transcripts, aes(y=L1motif_count_per_1kb, colour = stain, x = only_longest_transcripts$`pct_at`)) +
+  geom_point(alpha = 0.5) +
+  facet_wrap(~facet_stain) +
+  ggpubr::stat_cor() +
+  theme_bw() +
+  ylab("L1 motif density") +
+  xlab("AT content") +
+    theme(axis.title=element_text(size=14,face="bold"), 
+        legend.position = "None",
+        strip.text.x = element_text(size = 14, face="bold"))
+
+ggplot(only_longest_transcripts, aes(y=Z_score, colour = stain, x = only_longest_transcripts$`pct_at`)) +
+  geom_point(alpha = 0.5) +
+  facet_wrap(~stain)
+```
+
+## Estimating the distanse to the telomeres
+
+```{r}
+ggplot(only_longest_transcripts[strand == "+", ], aes(x=start, y = L1motif_count_per_1kb)) +
+  geom_point(alpha = 0.7) +
+  facet_wrap(~facet) +
+  theme_bw() +
+  ylab("L1 motif density") +
+  xlab("Start coordinate of the gene") +
+  theme(axis.text = element_blank(), 
+        axis.title=element_text(size=14,face="bold"), 
+        legend.position = "None",
+        strip.text.x = element_text(size = 14, face="bold"))
+
+ggplot(only_longest_transcripts[strand == "-"], aes(x=end, y = L1motif_count_per_1kb, colour = seqid)) +
+  geom_point(alpha = 0.7) +
+  facet_wrap(~facet) +
+  theme_bw() +
+  ylab("L1 motif density") +
+  xlab("Start coordinate of the gene") +
+  theme(axis.text = element_blank(), 
+        axis.title=element_text(size=14,face="bold"), 
+        legend.position = "None",
+        strip.text.x = element_text(size = 14, face="bold"))
+
+ggplot(only_longest_transcripts[seqid == 1, ], aes(x=start, y = L1motif_count_per_1kb, colour = seqid)) +
+  geom_point(alpha = 0.7) +
+  facet_wrap(~facet) +
+  theme_bw() +
+  ylab("L1 motif density") +
+  xlab("Start coordinate of the gene") +
+  theme(axis.text = element_blank(), 
+        axis.title=element_text(size=14,face="bold"), 
+        legend.position = "None",
+        strip.text.x = element_text(size = 14, face="bold"))
+```
+
+```{r}
+ggplot(only_longest_transcripts, aes(x=start, y = Z_score, colour = seqid)) +
+  geom_point(alpha = 0.7) +
+  facet_wrap(~facet) +
+  theme_bw() +
+  ylab("L1 motif density normalised per AT content") +
+  xlab("Start coordinate of the gene") +
+  theme(axis.text = element_blank(), 
+        axis.title=element_text(size=14,face="bold"), 
+        legend.position = "None",
+        strip.text.x = element_text(size = 14, face="bold"))
+```
+
+```{r}
+ggplot(only_longest_transcripts, aes(x=start, y = Z_score, colour = Haploinsufficiency_essential_genes_2022)) +
+  geom_point(alpha = 0.7) +
+  facet_wrap(~facet) +
+  theme_bw() +
+  ylab("L1 motif density normalised per AT content") +
+  xlab("Start coordinate of the gene") +
+  theme(axis.text = element_blank(), 
+        axis.title=element_text(size=14,face="bold"), 
+        legend.position = "None",
+        strip.text.x = element_text(size = 14, face="bold"))
+```
+
+## Normalized distance to the telomere
+
+```{r}
+chrom_sizes <- fread("../genomes/chromInfo.txt")
+
+chrom_sizes <- chrom_sizes[1:24, ]
+chrom_sizes$V1 <- gsub("chr", "", chrom_sizes$V1)
+colnames(chrom_sizes) <- c("seqname", "chrom_size")
+
+only_longest_transcripts <- merge(only_longest_transcripts, chrom_sizes, by.x = "seqid", by.y = "seqname")
+
+only_longest_transcripts$normalized_distanse_to_telomeres <- 0
+
+only_longest_transcripts[strand == "+", ]$normalized_distanse_to_telomeres <- only_longest_transcripts[strand == "+", ]$start / only_longest_transcripts[strand == "+", ]$chrom_size
+only_longest_transcripts[strand == "-", ]$normalized_distanse_to_telomeres <- only_longest_transcripts[strand == "-", ]$end / only_longest_transcripts[strand == "-", ]$chrom_size
+```
+
+```{r}
+ggplot(only_longest_transcripts, aes(x=normalized_distanse_to_telomeres, y = L1motif_count_per_1kb, colour = Haploinsufficiency_essential_genes_2022)) +
+  geom_point(alpha = 0.7) +
+  facet_wrap(~facet) +
+  theme_bw() +
+  ylab("L1 motif density normalised per AT content") +
+  xlab("") +
+  theme(axis.text = element_blank(), 
+        axis.title=element_text(size=14,face="bold"), 
+        legend.position = "None",
+        strip.text.x = element_text(size = 14, face="bold"))
+```
+
+```{r}
+ggplot(only_longest_transcripts, aes(x=normalized_distanse_to_telomeres, fill = Haploinsufficiency_essential_genes_2022)) +
+  geom_density(alpha = 0.7) +
+  facet_wrap(~facet) +
+  theme_bw() +
+  ylab("normalized_distanse_to_telomeres") +
+  xlab("") +
+  theme(axis.title=element_text(size=14,face="bold"), 
+        legend.position = "None",
+        strip.text.x = element_text(size = 14, face="bold"))
+```
+
+```{r}
+ggplot(only_longest_transcripts, aes(x=normalized_distanse_to_telomeres, y = Z_score, colour = seqname)) +
+  geom_point(alpha = 0.7) +
+  theme_bw() +
+  ylab("Z_score") +
+  xlab("normalized_distanse_to_telomeres") +
+  theme(axis.title=element_text(size=14,face="bold"), 
+        legend.position = "None",
+        strip.text.x = element_text(size = 14, face="bold"))
+```
+
+```{r}
+ggplot(only_longest_transcripts, aes(x=normalized_distanse_to_telomeres)) +
+  geom_density(alpha = 0.7) +
+  facet_wrap(~facet) +
+  theme_bw() +
+  ylab("Z_score") +
+  xlab("normalized_distanse_to_telomeres") +
+  theme(axis.title=element_text(size=14,face="bold"),
+        strip.text.x = element_text(size = 14, face="bold"))
+```
+
+```{r}
+library(chromoMap)
+
+chromosomes <- fread("chrom_sizes.csv", skip = 1, header = FALSE)
+centromeres <- fread("centromeres_coordinates.csv", header = FALSE)
+centromeres$V6 <- NULL
+centromeres$V5 <- NULL
+colnames(centromeres) <- c("rownumber", "seqname", "start", "end")
+centromeres$L1motif_count_per_1kb <- -10
+
+plot1 <- chromoMap(list(chromosomes), list(centromeres),
+          data_type = "numeric",
+          plots = "scatter")
+
+plot1
+
+tmp <- only_longest_transcripts[, c("rownumber", "seqname", "start", "end", "L1motif_count_per_1kb")]
+
+plot2 <- chromoMap(list(chromosomes), list(rbind(tmp, centromeres, fill=TRUE)),
+          data_based_color_map = T,
+          data_type = "numeric",
+          plots = "scatter")
+
+plot2
+
+plot3 <- chromoMap(list(chromosomes), list(rbind(tmp, centromeres, fill=TRUE)),
+          data_based_color_map = T,
+          data_type = "numeric")
+
+plot3
+```
+
+
+# Intron analysis
+
+Long introns have higher AT-content due to splicing mechanism (Amit, 2012)
+
+## Importing results of homer for introns
+
+```{r}
+homer_results_introns_human <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/intron_data/all_introns_for_bedtools_count_count_motif_human.bed")
+
+colnames(homer_results_introns_human) <- c("seqname", "source", "feature", "start", "end", 
+                                   "score", "strand", "frame", 
+                                   "rownumber_1","L1_motif_count_same", "rownumber_2",
+                                   "L1_motif_count_opposite")
+```
+
+```{r}
+nrow(homer_results_introns_human)
+summary(homer_results_introns_human$rownumber_1 == homer_results_introns_human$rownumber_2)
+```
+
+```{r}
+homer_results_introns_human$rownumber_2 <- NULL
+colnames(homer_results_introns_human) <- c("seqname", "source", "feature", "start", "end", 
+                                   "score", "strand", "frame", 
+                                   "rownumber","L1_motif_count_same",
+                                   "L1_motif_count_opposite")
+```
+
+## Merge gtf annotation and homer results
+
+```{r}
+#inner_introns
+#colnames(inner_introns)
+#colnames(homer_results_introns_human)
+homer_results_introns_human$rownumber <- as.character(homer_results_introns_human$rownumber)
+
+data_introns <- merge(inner_introns, homer_results_introns_human, by.x = c("source","feature", "start", "end", "score", "strand", "uniqid"),
+                      by.y=  c("source","feature", "start", "end", "score", "strand","rownumber"))
+
+AT_content_introns <- fread("/Volumes/cristo-nas-shared/Personal_documents/Larisa/intron_data/all_introns_for_bedtools_count_ATcontent.bed")
+colnames(AT_content_introns) <- c("seqname", "source", "feature", "start", "end", 
+                          "score", "strand", "frame", 
+                          "rownumber", "pct_at", "pct_gc", 
+                          "num_A", "num_C", "num_G", "num_T", "num_N", "num_oth", "seq_len")
+
+AT_content_introns$rownumber <- as.character(AT_content_introns$rownumber)
+#data_introns$rownumber <- as.integer(data_introns$rownumber)
+
+data_introns <- merge(AT_content_introns, data_introns, by.x = c("source","feature", "start", "end", "score", "strand", "rownumber"),
+                      by.y=  c("source","feature", "start", "end", "score", "strand","uniqid"))
+
+fwrite(data_introns, "homer_results_introns_human.gtf")
+```
+
+```{r}
+data_introns <- fread("./homer_results_introns_human.gtf")
+#colnames(data_introns)
+```
+
+## Add features to the table
+
+```{r}
+data_introns$L1_motif_density_same_strand <- data_introns$L1_motif_count_same / 
+                                                                      data_introns$seq_len * 1000
+data_introns$L1_motif_density_opposite_strand <- data_introns$L1_motif_count_opposite / 
+                                                                      data_introns$seq_len * 1000
+```
+
+```{r}
+ggplot(data_introns, aes(x = seq_len)) +
+  geom_density()
+
+summary(data_introns$seq_len)
+```
+
+## Plots
+
+### AT content and L1 motif density
+
+```{r}
+tmp <- data_introns[, c("pct_at", "L1_motif_density_same_strand", "L1_motif_density_opposite_strand", "seq_len", "num_A", "num_T")]
+tmp <- melt.data.table(tmp, measure.vars = 2:3)
+
+ggplot(tmp, aes(x = tmp$pct_at, y=value, colour = variable))+
+  geom_point(alpha = 0.1) +
+  theme_bw() +
+  xlab("AT_content") +
+  ylab("L1 motif density") +
+  facet_wrap(~variable) +
+  ggpubr::stat_cor()+
+  theme(legend.position = "None")
+
+ggplot(data_introns, aes(x = pct_at))+
+  geom_density() +
+  theme_bw()
+```
+
+## AT content and intron length
+
+```{r}
+tmp <- data_introns[, c("pct_at", "L1_motif_density_same_strand", "L1_motif_density_opposite_strand", "seq_len", "num_A", "num_T")]
+tmp <- melt.data.table(tmp, measure.vars = 2:3)
+
+ggplot(tmp, aes(x = tmp$pct_at))+
+  geom_density() +
+  theme_bw()
+
+tmp <- data_introns[, c("pct_at", "L1_motif_density_same_strand", "L1_motif_density_opposite_strand", "seq_len", "num_A", "num_T")]
+tmp <- melt.data.table(tmp, measure.vars = 2:3)
+
+ggplot(tmp, aes(y = tmp$pct_at, x=seq_len))+
+  geom_point(alpha = 0.1) +
+  ggpubr::stat_cor() +
+  theme_bw() +
+  ylab("AT_content") +
+  xlab("Length of the intron")
+
+ggplot(tmp, aes(y = value, x=seq_len, color = variable))+
+  geom_point(alpha = 0.1) +
+  ggpubr::stat_cor() +
+  theme_bw() +
+  facet_wrap(~variable) +
+  ylab("L1 motif density") +
+  xlab("Length of the intron") +
+  theme(legend.position = "None")
+```
+
+```{r}
+data_introns$length_bin <- round(data_introns$seq_len / 100)
+
+ggplot(data_introns[seq_len < 5000, ], aes(x = pct_at, y = as.factor(length_bin), fill = as.factor(length_bin)))+
+   geom_density_ridges2(alpha = 0.7) +
+  theme_bw() +
+  ylab("Density of AT content in * 100 b length window") +
+  theme(legend.position = "None")
+
+ggplot(data_introns[seq_len < 5000, ], aes(x = pct_at, y = as.factor(length_bin), fill = as.factor(length_bin)))+
+   geom_violin(alpha = 0.7) +
+  theme_bw() +
+  ylab("Density of AT content in * 100 b length window") +
+  theme(legend.position = "None")
+
+ggplot(data_introns[seq_len < 1000, ], aes(x = L1_motif_density_opposite_strand + L1_motif_density_same_strand, y = as.factor(length_bin), fill = as.factor(length_bin)))+
+   geom_density_ridges2(alpha = 0.7) +
+  theme_bw() +
+  xlab("L1 motif density") +
+  ylab("Distribution of L1 motif density in * 100 b length window") +
+  theme(legend.position = "None")
+```
+
+## L1 motif density and intron length
+
+```{r}
+ggplot(tmp, aes(y = tmp$value, x=seq_len, colour = variable))+
+  geom_point(alpha = 0.1) +
+  theme_bw() +
+  facet_wrap(~variable) +
+  ylab("L1 motif density per 1 kb") +
+  xlab("Length of the intron") +
+  theme(legend.position="none") +
+  ggpubr::stat_cor()
+```
+
+# Alternative and constitutive exons
+
+## TO DO
+
+-   filter exons from protein coding genes and lncRNA (?)
+-   filter + and - strand for exon and calculate density for L1 motifs
+    on different strands
+-   figure out what to do with expression data
+-   how to include conservation of splicing event?
+-   length of downstream and upstream introns
+-   separate graphs for first and last exon
+-   define the most expressed transcript (+)
+
+## Tables from GTEx with summarised PSI values
+
+<http://ascot.cs.jhu.edu/>
+
+```{r}
+data_psi <- fread("./gene_sets/gtex_psi.csv.gz")
+data_nauc <- fread("./gene_sets/gtex_nauc.csv.gz")
+```
+
+```{r}
+data_psi[data_psi == -1] <- NA
+melted_data <- melt.data.table(data_psi, id.vars = 1:12, variable.name = "Tissue", value.name = "PSI")
+
+levels(melted_data$Tissue)
+
+ggplot(melted_data[Tissue %in% c("Thyroid", "Cortex - Brain", "Testis", "Sigmoid - Colon", "Skeletal - Muscle"), ], aes(y=PSI, x = Tissue, fill = Tissue)) +
+  geom_violin(alpha = 0.7) +
+  theme_bw() +
+  theme(legend.position = "None", axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+```{r}
+melted_data[, .(mean_PSI = mean(PSI, na.rm=TRUE), sd_PSI = sd(PSI, na.rm=TRUE)), by = exon_id]
+
+exons_to_analyse <- data_psi[, 1:12]
+exons_to_analyse <- merge(exons_to_analyse, melted_data[, .(mean_PSI = mean(PSI, na.rm=TRUE), sd_PSI = sd(PSI, na.rm=TRUE)), by = exon_id])
+
+summary(exons_to_analyse$mean_PSI)
+summary(exons_to_analyse$sd_PSI)
+
+exons_to_analyse$alternative_splice_site_group <- as.factor(exons_to_analyse$alternative_splice_site_group)
+summary(exons_to_analyse[gene_symbol %in% only_longest_transcripts$gene_name]$alternative_splice_site_group)
+
+exons_to_analyse$seqid <- sapply(exons_to_analyse$exon_location, function (x) strsplit(x, ":")[[1]][1])
+exons_to_analyse$seqid <- gsub("chr", "", exons_to_analyse$seqid)
+exons_to_analyse$coordinates <- sapply(exons_to_analyse$exon_location, function (x) strsplit(x, ":")[[1]][2])
+exons_to_analyse$start <- sapply(exons_to_analyse$coordinates, function (x) strsplit(x, "-")[[1]][1])
+exons_to_analyse$end <- sapply(exons_to_analyse$coordinates, function (x) strsplit(x, "-")[[1]][2])
+exons_to_analyse$score <- "."
+
+exons_to_analyse[, c("seqid", "start", "end", "exon_id", "score", "exon_strand")]
+exons_to_analyse <- exons_to_analyse %>% tidyr::separate_rows (start,end, sep = "\\|")
+
+#file for analysis of the conservation
+setDT(exons_to_analyse)
+
+exons_to_analyse$start <- as.integer(exons_to_analyse$start)
+exons_to_analyse$end <- as.integer(exons_to_analyse$end)
+exons_to_analyse$length_exon <- exons_to_analyse$end - exons_to_analyse$start
+
+
+setDT(exons_to_analyse)
+for_conservation_analysis <- exons_to_analyse[exons_to_analyse[, .I[which.max(length_exon)], by=exon_location]$V1]
+
+fwrite(for_conservation_analysis[, c("seqid", "start", "end", "exon_id", "score", "exon_strand")], "./bed_files_for_metaplots/all_exons_PSI_data_derived.bed", sep = "\t", col.names = FALSE, scipen = 10)
+```
+
+```{r}
+exons_PSI <- merge(data_exons, exons_to_analyse, by = c("seqid", "start", "end"))
+
+#summary(exons_to_analyse$start %in% data_exons$start)
+#summary(exons_to_analyse$end %in% data_exons$end)
+#summary(exons_to_analyse$seqid %in% data_exons$seqid)
+
+nrow(data[transcript_id %in% only_longest_transcripts$transcript_id & transcript_biotype == "protein_coding" & type == "exon" , ])
+nrow(exons_PSI[transcript_id %in% only_longest_transcripts$transcript_id, ])
+
+exons_PSI <- exons_PSI[transcript_id %in% only_longest_transcripts$transcript_id, ]
+exons_PSI$start_for_bed <- exons_PSI$start - 1
+sum(only_longest_transcripts$exon_count)
+
+## files for meta plots generation
+fwrite(exons_PSI[mean_PSI > 90 & sd_PSI < 1, c("seqid", "start_for_bed", "end", "exon_id.x", "score.x", "exon_strand")], "./bed_files_for_metaplots/exons_with_high_PSI.bed", sep = "\t", col.names = FALSE, scipen = 10)
+
+fwrite(exons_PSI[mean_PSI < 10 & sd_PSI < 1, c("seqid", "start_for_bed", "end", "exon_id.x", "score.x", "exon_strand")], "./bed_files_for_metaplots/exons_with_low_PSI.bed", sep = "\t", col.names = FALSE, scipen = 10)
+
+fwrite(exons_PSI[sd_PSI > 4.5, c("seqid", "start_for_bed", "end", "exon_id.x", "score.x", "exon_strand")], "./bed_files_for_metaplots/exons_with_diff_PSI.bed", sep = "\t", col.names = FALSE, scipen = 10)
+
+## exons with known PSI 39682, exons total 206881s
+```
+
+## Files for metaplots generation
+
+```{r}
+exons_PSI[exon_number != exon_count & exon_number != 1 & intron_length < 1000, ]
+
+fwrite(exons_PSI[exon_number == 1, c("seqid", "start_for_bed", "end", "exon_id.x", "score.x", "exon_strand")], 
+       "./bed_files_for_metaplots/first_exons.bed", sep = "\t", col.names = FALSE, scipen = 10)
+
+fwrite(exons_PSI[exon_number == exon_count, c("seqid", "start_for_bed", "end", "exon_id.x", "score.x", "exon_strand")], 
+       "./bed_files_for_metaplots/last_exons.bed", sep = "\t", col.names = FALSE, scipen = 10)
+
+fwrite(exons_PSI[exon_number != exon_count & exon_number != 1 & intron_length < 1000, c("seqid", "start_for_bed", "end", "exon_id.x", "score.x", "exon_strand")], 
+       "./bed_files_for_metaplots/intermedite_exons_short_introns.bed", sep = "\t", col.names = FALSE, scipen = 10)
+
+fwrite(exons_PSI[exon_number != exon_count & exon_number != 1 & intron_length > 1000, c("seqid", "start_for_bed", "end", "exon_id.x", "score.x", "exon_strand")], 
+       "./bed_files_for_metaplots/intermedite_exons_long_introns.bed", sep = "\t", col.names = FALSE, scipen = 10)
+```
+
+## Conservation level of exon
+
+<https://genome.ucsc.edu/cgi-bin/hgc?hgsid=784677241_vYLABfJrjxNKeDTusOROCSUBXtnK&c=chrM&l=0&r=16569&o=0&t=16569&g=phyloP100way&i=phyloP100way>
+
+Another important difference is that phyloP can measure acceleration
+(faster evolution than expected under neutral drift) as well as
+conservation (slower than expected evolution). In the phyloP plots,
+sites predicted to be conserved are assigned positive scores (and shown
+in blue), while sites predicted to be fast-evolving are assigned
+negative scores (and shown in red). The absolute values of the scores
+represent -log p-values under a null hypothesis of neutral evolution.
+
+## DO AGAIN!!
+
+```{r}
+data_conservation <- fread("./all_exons_PSI_data_derived_conservation_level.bed")
+colnames(data_conservation) <- c("seqid", "start", "end", "exon_id", "score", "exon_strand", "conservation_score")
+exons_to_analyse <- merge(exons_to_analyse, data_conservation, by="exon_id")
+
+exons_to_analyse$conservation_score <- as.numeric(exons_to_analyse$conservation_score)
+exons_to_analyse$evolutoin_of_exon <- "Undetermined"
+exons_to_analyse[mean_PSI > 90 & sd_PSI < 1, evolutoin_of_exon := "High inclusion"]
+exons_to_analyse[mean_PSI < 10 & sd_PSI < 1, evolutoin_of_exon := "Low inclusion"]
+exons_to_analyse[sd_PSI > 4.5, evolutoin_of_exon := "Different inclusion in different tissues"]
+
+summary(exons_to_analyse$start.y == exons_to_analyse$start.x)
+```
+
+## 
+
+```{r}
+ggplot(exons_to_analyse, aes(x=mean_PSI, y=conservation_score, color = evolutoin_of_exon)) +
+  geom_point(alpha=0.6)+
+  theme_bw()+
+  geom_hline(yintercept = 0, colour = "grey", linetype = "dashed", size = 2)+
+  labs(x="Mean level of exon inclusion", y="Conservation level of exon", color="Type of exon") +
+  annotate("text", x=10, y=2, label= "Conserved")+
+  annotate("text", x=10, y=-2, label= "Fast evolving")
+```
+
+```{r}
+ggplot(exons_to_analyse, aes(x=sd_PSI, fill = evolutoin_of_exon ))+
+  geom_density()
+
+ggplot(exons_to_analyse, aes(x=mean_PSI, fill= evolutoin_of_exon ))+
+  geom_density()
+
+ggplot(exons_to_analyse, aes(x=conservation_score))+
+  geom_density()
+```
+
+```{r}
+fwrite(exons_to_analyse[conservation_score < 0, c("seqid.y", "start.y", "end.y", "exon_id", "score.y", "exon_strand.y")], "exons_fast_evolving.bed", sep = "\t", col.names = FALSE, scipen = 10)
+##nrow(exons_to_analyse[conservation_score < 0, c("seqid.y", "start.y", "end.y", "exon_id", "score.y", "exon_strand.y")])
+##26878
+fwrite(exons_to_analyse[conservation_score > 0, c("seqid.y", "start.y", "end.y", "exon_id", "score.y", "exon_strand.y")], "exons_conserved.bed", sep = "\t", col.names = FALSE, scipen = 10)
+##nrow(exons_to_analyse[conservation_score > 0, c("seqid.y", "start.y", "end.y", "exon_id", "score.y", "exon_strand.y")])
+##53135
+```
+
+## Probably helpful data about evolutionary conservation of splicing events
+
+```{r}
+data <- fread("./EVENT_CONSERVATION.tab.gz")
+data$Type <- as.factor(data$Type)
+summary(data$Type)
+head(data)
+```
+
+# Extracting U zones
+
+### CHECK AND DO IT AGAIN!
+
+```{r}
+U_zone_border <- 210 
+
+## first exon upstream
+data[feature == "exon" & exon_number == 1 & strand == "+", upstream_intron_coordinate_start := start - U_zone_border]
+data[feature == "exon" & exon_number == 1 & strand == "+", upstream_intron_coordinate_end := start]
+
+data[feature == "exon" & exon_number == 1 & strand == "-", upstream_intron_coordinate_start := end]
+data[feature == "exon" & exon_number == 1 & strand == "-", upstream_intron_coordinate_end := end + U_zone_border]
+
+## last exon downstream
+data[feature == "exon", exon_count := .N, by=transcript_id]
+
+data[feature == "exon" & exon_number == exon_count & strand == "+", downstream_intron_coordinate_start := end]
+data[feature == "exon" & exon_number == exon_count & strand == "+", downstream_intron_coordinate_end := end + U_zone_border]
+
+data[feature == "exon" & exon_number == exon_count & strand == "-", downstream_intron_coordinate_start := start - U_zone_border]
+data[feature == "exon" & exon_number == exon_count & strand == "-", downstream_intron_coordinate_end := start]
+
+## intermediate exons upstream
+setDT(data)
+
+data[feature == "exon" & exon_number > 1 & strand == "+", upstream_intron_coordinate_end := start]
+
+data[feature == "exon" & strand == "+", upstream_exon_end := lag(end), by = transcript_id]
+data[feature == "exon" & strand == "+", upstream_intron_length := start - upstream_exon_end]
+data[feature == "exon" & exon_number > 1 & strand == "+", 
+     upstream_intron_coordinate_start := fifelse(upstream_intron_length > U_zone_border, 
+                                                 start - U_zone_border,
+                                                 upstream_exon_end)]
+
+
+data[feature == "exon" & exon_number > 1 & strand == "-", upstream_intron_coordinate_start := end]
+
+data[feature == "exon" & strand == "-", upstream_exon_end := lead(start), by = transcript_id]
+data[feature == "exon" & strand == "-", upstream_intron_length := upstream_exon_end - end]
+data[feature == "exon" & exon_number > 1 & strand == "-", 
+     upstream_intron_coordinate_end := fifelse(upstream_intron_length > U_zone_border, 
+                                                 end + U_zone_border ,
+                                                 upstream_exon_end)]
+
+
+
+## intermediate exons downstream
+setDT(data)
+
+data[feature == "exon" & exon_number < exon_count & strand == "+", downstream_intron_coordinate_start := end]
+
+
+data[feature == "exon" & strand == "+", downstream_exon_start := lead(start), by = transcript_id]
+data[feature == "exon" & strand == "+", downstream_intron_length := downstream_exon_start - end]
+data[feature == "exon" & exon_number < exon_count & strand == "+", 
+     downstream_intron_coordinate_end := fifelse(downstream_intron_length > U_zone_border, 
+                                                end + U_zone_border,
+                                                downstream_exon_start)]
+
+
+data[feature == "exon" & exon_number < exon_count & strand == "-", downstream_intron_coordinate_end := start]
+
+
+data[feature == "exon" & strand == "-", downstream_exon_start := lag(end), by = transcript_id]
+data[feature == "exon" & strand == "-", downstream_intron_length := start - downstream_exon_start]
+data[feature == "exon" & exon_number < exon_count & strand == "-", 
+     downstream_intron_coordinate_start := fifelse(downstream_intron_length > U_zone_border, 
+                                                start - U_zone_border,
+                                                downstream_exon_start)]
+```
+
+## Preparing gtf file
+
+```{r}
+U_zones_introns <- data[feature == "exon" & transcript_biotype == "protein_coding" & transcript_id %in% only_longest_transcripts$transcript_id, ]
+
+length(unique(only_longest_transcripts$transcript_id))
+sum(only_longest_transcripts$exon_count)
+
+nrow(U_zones_introns) == sum(only_longest_transcripts$exon_count)
+#colnames(U_zones_introns)
+
+summary(U_zones_introns$downstream_intron_coordinate_start > U_zones_introns$downstream_intron_coordinate_end)
+summary(U_zones_introns$upstream_intron_coordinate_start > U_zones_introns$upstream_intron_coordinate_end)
+
+downstream_introns <- U_zones_introns[, c("seqname", "source", "feature", "downstream_intron_coordinate_start", "downstream_intron_coordinate_end", "score", "strand", "frame")]
+colnames(downstream_introns) <- c("seqname", "source", "feature", "start", "end", "score", "strand", "frame")
+downstream_introns$feature <- "downstream_intron"
+
+upstream_introns <- U_zones_introns[, c("seqname", "source", "feature", "upstream_intron_coordinate_start", "upstream_intron_coordinate_end", "score", "strand", "frame")]
+colnames(upstream_introns) <- c("seqname", "source", "feature", "start", "end", "score", "strand", "frame")
+upstream_introns$feature <- "upstream_intron"
+
+
+U_zones_for_bedtools_count <- rbind(downstream_introns, upstream_introns)
+U_zones_for_bedtools_count$uniq_id_for_sorting <- row.names(U_zones_for_bedtools_count)
+
+
+fwrite(U_zones_for_bedtools_count, "./U_zones_for_bedtools_count.gtf", sep = "\t", col.names = FALSE, scipen = 10)
+```
+
+```{bash}
+bedtools sort -i U_zones_for_bedtools_count.gtf > sorted_U_zones_for_bedtools_count.gtf
+
+bedtools map -a sorted_U_zones_for_bedtools_count.gtf -b sorted_homer_results_homer_corrected.bed -c 6 -o count -s > count_motif_U_zones_same_strand.bed
+
+bedtools map -a sorted_U_zones_for_bedtools_count.gtf -b sorted_homer_results_homer_corrected.bed -c 6 -o count -S > count_motif_U_zones_opposite_strand.bed
+
+paste count_motif_U_zones_same_strand.bed count_motif_U_zones_opposite_strand.bed | cut -f 1,2,3,4,5,6,7,8,9,10,19,20 > count_motif_U_zones_human.bed
+
+rm count_motif_U_zones_same_strand.bed
+rm count_motif_U_zones_opposite_strand.bed
+
+## Add AT-content to gtf file
+bedtools nuc -fi Homo_sapiens.GRCh38.dna_sm.primary_assembly.fa -bed sorted_U_zones_for_bedtools_count.gtf  > U_zones_AT_content.gtf
+```
+
+```{r}
+U_zones_introns_motif_count <- fread("./count_motif_U_zones_human.bed")
+AT_content_U_zones
+```
+
+# Identify minimal distanse to L1 in introns
+
+```{r}
+rm_out <- fread("../genomes/hg38.fa.out")
+colnames(rm_out) <- c("SW_score",  "perc_div", "perc_del", "perc_ins", "seq_id", "start", "end","left", "strand",
+                      "matching_repeat", "class_family", "position_repeat_start",
+                      "position_repeat_end", "position_repeat_left", "ID")
+
+rm_out_L1 <- rm_out[class_family == "LINE/L1", ]
+rm_out_L1$uniq_ID <- rownames(rm_out_L1)
+rm_out_L1$strand <- as.factor(rm_out_L1$strand)
+rm_out_L1$seq_id <- as.factor(rm_out_L1$seq_id)
+rm_out_L1[strand == "C", strand := "-"]
+
+fwrite(rm_out_L1[, c("seq_id", "start", "end", "uniq_ID", "SW_score", "strand")], "rm_out_L1.bed", sep = "\t", col.names = FALSE, scipen = 10)
+```
+
+```{bash}
+awk '{gsub(/chr1/,"1")\
+> ;gsub(/chr10/,"10");gsub(/chr11/,"11");gsub(/chr12/,"12")\
+> ;gsub(/chr13/,"13");gsub(/chr14/,"14");gsub(/chr15/,"15")\
+> ;gsub(/chr16/,"16");gsub(/chr17/,"17")\
+> ;gsub(/chr18/,"18");gsub(/chr19/,"19")\
+> ;gsub(/chr2/,"2")\
+> ;gsub(/chr20/,"20");gsub(/chr21/,"21")\
+> ;gsub(/chr22/,"22");gsub(/chr3/,"3");gsub(/chr4/,"4");gsub(/chr5/,"5")\
+> ;gsub(/chr6/,"6");gsub(/chr7/,"7")\
+> ;gsub(/chr8/,"8");gsub(/chr9/,"9");gsub(/chrX/,"x")\
+> ;gsub(/chrY/,"Y");gsub(/chrM/,"MT")\
+> ;gsub(/chr14_GL000009v2_random/,"GL000009.2")\
+> ;gsub(/chr14_GL000194v1_random/,"GL000194.1")\
+> ;gsub(/chrUn_GL000195v1/,"GL000195.1")\
+> ;gsub(/chr17_GL000205v2_random/,"GL000205.2")\
+> ;gsub(/chrUn_GL000213v1/,"GL000213.1")\
+> ;gsub(/chrUn_GL000216v2/,"GL000216.2")\
+> ;gsub(/chrUn_GL000218v1/,"GL000218.1")\
+> ;gsub(/chrUn_GL000219v1/,"GL000219.1")\
+> ;gsub(/chrUn_GL000220v1/,"GL000220.1")\
+> ;gsub(/chr14_GL000225v1_random/,"GL000225.1")\
+> ;gsub(/chrUn_KI270442v1/,"KI270442.1")\
+> ;gsub(/chr1_KI270711v1_random/,"KI270711.1")\
+> ;gsub(/chr1_KI270713v1_random/,"KI270713.1")\
+> ;gsub(/chr11_KI270721v1_random/,"KI270721.1")\
+> ;gsub(/chr14_KI270726v1_random/,"KI270726.1")\
+> ;gsub(/chr15_KI270727v1_random/,"KI270727.1")\
+> ;gsub(/chr16_KI270728v1_random/,"KI270728.1")\
+> ;gsub(/chr22_KI270731v1_random/,"KI270731.1")\
+> ;gsub(/chr22_KI270733v1_random/,"KI270733.1")\
+> ;gsub(/chr22_KI270734v1_random/,"KI270734.1")\
+> ;gsub(/chrUn_KI270744v1/,"KI270744.1")\
+> ;gsub(/chrUn_KI270750v1/,"KI270750.1")}1' rm_out_L1.bed > rm_out_L1_chr.bed
+bedtools intersect -a all_introns_for_bedtools_count.gtf -b rm_out_L1_chr.bed -wa -wb > introns_intersect_L1.bed
+```
+
+```{r}
+introns_intersect_L1 <- fread("./introns_intersect_L1.bed")
+
+introns_intersect_L1
+colnames(introns_intersect_L1) <- c("seqid", "source", "feature", "start", "end", "score", "strand", "phase", "intron_uniq_id", "seq_id_L1", "start_L1", "end_L1", "uniq_ID_L1", "SW_score", "strand_L1")
+
+introns_intersect_L1
+
+rm(tmp)
+
+introns_of_MANE_transcripts_selected <- inner_introns[transcript_id %in% MANE_transcripts_selected$transcript_id, ]$uniqid
+
+L1_in_introns <- merge(inner_introns[transcript_id %in% MANE_transcripts_selected$transcript_id, ], 
+                       introns_intersect_L1[intron_uniq_id %in% introns_of_MANE_transcripts_selected, ])
+
+L1_in_introns$uniqid <- as.factor(L1_in_introns$uniqid)
+summary(L1_in_introns$uniqid == L1_in_introns$intron_uniq_id)
+L1_in_introns[L1_in_introns$uniqid != L1_in_introns$intron_uniq_id, ]
+
+
+L1_in_introns$uniq_ID_L1 <- as.integer(L1_in_introns$uniq_ID_L1)
+rm_out_L1$uniq_ID <- as.integer(rm_out_L1$uniq_ID)
+rm_out_L1$position_repeat_left <- gsub("[()]", "", rm_out_L1$position_repeat_left)
+rm_out_L1$position_repeat_left <- as.integer(rm_out_L1$position_repeat_left)
+rm_out_L1$length <- rm_out_L1$end - rm_out_L1$start
+rm_out_L1[strand == "+", consensus_length := position_repeat_end + position_repeat_left]
+
+rm_out_L1$position_repeat_start <- gsub("[()]", "", rm_out_L1$position_repeat_start)
+rm_out_L1$position_repeat_start <- as.integer(rm_out_L1$position_repeat_start)
+rm_out_L1[strand == "-", consensus_length := position_repeat_end + position_repeat_start]
+
+
+rm_out_L1[, integrity := length * 100 / consensus_length ]
+summary(rm_out_L1$integrity)
+
+L1_in_introns <- merge(L1_in_introns, rm_out_L1, by.x = "uniq_ID_L1", by.y = "uniq_ID")
+
+
+L1_in_introns$start.y <- NULL
+L1_in_introns$end.y <- NULL
+L1_in_introns$strand.y <- NULL
+L1_in_introns$SW_score.y <- NULL
+
+L1_in_introns$orientation <- "same"
+L1_in_introns[strand.x != strand_L1, orientation := "opposite"]
+
+
+L1_in_introns[strand.x == "+" , distance_to_upstream_exon := start_L1 - start.x]
+L1_in_introns[strand.x == "-", distance_to_upstream_exon := end.x - end_L1]
+
+## remove L1 which contain gene exon inside - quite rare situation, but still
+L1_in_introns <- L1_in_introns[distance_to_upstream_exon > 0, ]
+
+## Maybe better to choose minimum in distance to upstream or downstream exon?
+L1_in_introns <- L1_in_introns[L1_in_introns[, .I[which.min(distance_to_upstream_exon)], by=uniqid]$V1]
+
+L1_in_introns[strand.x == "+" , distance_to_downstream_exon := end.x - end_L1]
+L1_in_introns[strand.x == "-", distance_to_downstream_exon := start_L1 - start.x]
+
+summary(L1_in_introns$distance_to_upstream_exon)
+
+ggplot(L1_in_introns[distance_to_upstream_exon < 1000, ], 
+       aes(x=distance_to_upstream_exon, fill = orientation)) +
+  geom_histogram(bins = 50, alpha = 0.7, 
+                 aes(y = stat(count / sum(count)))) +
+  theme_bw()
+
+L1_in_introns$matching_repeat <- as.factor(L1_in_introns$matching_repeat)
+```
+
+# Genome-wide L1motif depleted regions
+
+```{r}
+region_10kb
+```
